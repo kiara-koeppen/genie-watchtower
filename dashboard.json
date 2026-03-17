@@ -712,22 +712,6 @@
         },
         {
           "widget": {
-            "name": "exec-subtitle",
-            "multilineTextboxSpec": {
-              "lines": [
-                "All metrics respect the global date range filter"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 1,
-            "width": 12,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
             "name": "exec-s1",
             "multilineTextboxSpec": {
               "lines": [
@@ -1590,6 +1574,86 @@
             "y": 18,
             "width": 4,
             "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "exec-date-from",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_genie_questions",
+                  "fields": [
+                    {
+                      "name": "min(event_date)",
+                      "expression": "MIN(`event_date`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "min(event_date)",
+                  "displayName": "From"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "From"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "exec-date-to",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_genie_questions",
+                  "fields": [
+                    {
+                      "name": "max(event_date)",
+                      "expression": "MAX(`event_date`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max(event_date)",
+                  "displayName": "To"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "To"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 1,
+            "width": 6,
+            "height": 1
           }
         }
       ]
