@@ -123,15 +123,7 @@
       "name": "ds_monthly_trend",
       "displayName": "Monthly Genie Trend",
       "queryLines": [
-        "SELECT DATE_TRUNC('MONTH', start_time) AS month, ",
-        "  COUNT(*) AS queries, ",
-        "  COUNT(DISTINCT executed_by) AS users, ",
-        "  ROUND(SUM(total_duration_ms)/1000.0/3600.0, 2) AS compute_hours, ",
-        "  ROUND(SUM(read_bytes)/1073741824.0, 1) AS gb_scanned ",
-        "FROM system.query.history ",
-        "WHERE query_source.genie_space_id IS NOT NULL ",
-        "  AND start_time >= date_sub(current_date(), 180) ",
-        "GROUP BY 1 ORDER BY 1 "
+        "SELECT DATE_TRUNC('MONTH', start_time) AS month,   COUNT(*) AS queries,   COUNT(DISTINCT executed_by) AS users,   ROUND(SUM(total_duration_ms)/1000.0/3600.0, 2) AS compute_hours,   ROUND(SUM(read_bytes)/1073741824.0, 1) AS gb_scanned FROM system.query.history WHERE query_source.genie_space_id IS NOT NULL   AND start_time >= date_sub(current_date(), 180) GROUP BY 1 ORDER BY 1 "
       ]
     },
     {
@@ -208,391 +200,112 @@
       "name": "ds_engagement_kpis",
       "displayName": "Engagement KPIs",
       "queryLines": [
-        "WITH messages AS ( ",
-        "  SELECT user_identity.email AS user_email, event_date ",
-        "  FROM system.access.audit ",
-        "  WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "), ",
-        "user_stats AS ( ",
-        "  SELECT user_email, COUNT(*) AS questions, COUNT(DISTINCT event_date) AS active_days ",
-        "  FROM messages GROUP BY user_email ",
-        "), ",
-        "tiers AS ( ",
-        "  SELECT CASE WHEN questions >= 50 AND active_days >= 10 THEN 'Power User' WHEN questions >= 10 AND active_days >= 3 THEN 'Regular' ELSE 'Casual' END AS tier, user_email, questions ",
-        "  FROM user_stats ",
-        "), ",
-        "conv AS ( ",
-        "  SELECT COALESCE(request_params['conversation_id'], request_id) AS cid ",
-        "  FROM system.access.audit ",
-        "  WHERE service_name = 'aibiGenie' AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') AND request_params['space_id'] IS NOT NULL ",
-        "), ",
-        "conv_depth AS ( ",
-        "  SELECT cid, COUNT(*) AS msg_count FROM conv GROUP BY cid ",
-        "), ",
-        "cost AS ( ",
-        "  SELECT COUNT(*) AS genie_queries, ROUND(SUM(total_duration_ms) / 1000.0 / 3600.0, 2) AS compute_hours, ROUND(SUM(read_bytes) / 1073741824.0, 1) AS gb_scanned, ROUND(AVG(total_duration_ms) / 1000.0, 1) AS avg_query_sec ",
-        "  FROM system.query.history WHERE query_source.genie_space_id IS NOT NULL ",
-        ") ",
-        "SELECT ",
-        "  ROUND(SUM(t.questions) * 1.0 / COUNT(DISTINCT t.user_email), 1) AS avg_questions_per_user, ",
-        "  COUNT(DISTINCT t.user_email) AS total_users, ",
-        "  ROUND((SELECT AVG(msg_count) FROM conv_depth), 1) AS avg_msgs_per_conversation, ",
-        "  ROUND((SELECT SUM(CASE WHEN msg_count >= 2 THEN 1 ELSE 0 END) * 1.0 / COUNT(*) FROM conv_depth), 2) AS multi_turn_pct, ",
-        "  (SELECT genie_queries FROM cost) AS total_genie_queries, ",
-        "  (SELECT compute_hours FROM cost) AS total_compute_hours, ",
-        "  (SELECT gb_scanned FROM cost) AS total_gb_scanned, ",
-        "  (SELECT avg_query_sec FROM cost) AS avg_query_seconds ",
-        "FROM tiers t "
+        "WITH messages AS (   SELECT user_identity.email AS user_email, event_date   FROM system.access.audit   WHERE service_name = 'aibiGenie'     AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL ), user_stats AS (   SELECT user_email, COUNT(*) AS questions, COUNT(DISTINCT event_date) AS active_days   FROM messages GROUP BY user_email ), tiers AS (   SELECT CASE WHEN questions >= 50 AND active_days >= 10 THEN 'Power User' WHEN questions >= 10 AND active_days >= 3 THEN 'Regular' ELSE 'Casual' END AS tier, user_email, questions   FROM user_stats ), conv AS (   SELECT COALESCE(request_params['conversation_id'], request_id) AS cid   FROM system.access.audit   WHERE service_name = 'aibiGenie' AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') AND request_params['space_id'] IS NOT NULL ), conv_depth AS (   SELECT cid, COUNT(*) AS msg_count FROM conv GROUP BY cid ), cost AS (   SELECT COUNT(*) AS genie_queries, ROUND(SUM(total_duration_ms) / 1000.0 / 3600.0, 2) AS compute_hours, ROUND(SUM(read_bytes) / 1073741824.0, 1) AS gb_scanned, ROUND(AVG(total_duration_ms) / 1000.0, 1) AS avg_query_sec   FROM system.query.history WHERE query_source.genie_space_id IS NOT NULL ) SELECT   ROUND(SUM(t.questions) * 1.0 / COUNT(DISTINCT t.user_email), 1) AS avg_questions_per_user,   COUNT(DISTINCT t.user_email) AS total_users,   ROUND((SELECT AVG(msg_count) FROM conv_depth), 1) AS avg_msgs_per_conversation,   ROUND((SELECT SUM(CASE WHEN msg_count >= 2 THEN 1 ELSE 0 END) * 1.0 / COUNT(*) FROM conv_depth), 2) AS multi_turn_pct,   (SELECT genie_queries FROM cost) AS total_genie_queries,   (SELECT compute_hours FROM cost) AS total_compute_hours,   (SELECT gb_scanned FROM cost) AS total_gb_scanned,   (SELECT avg_query_sec FROM cost) AS avg_query_seconds FROM tiers t "
       ]
     },
     {
       "name": "ds_engagement_tiers",
       "displayName": "Engagement Tiers",
       "queryLines": [
-        "WITH user_stats AS ( ",
-        "  SELECT user_identity.email AS user_email, COUNT(*) AS questions, COUNT(DISTINCT event_date) AS active_days ",
-        "  FROM system.access.audit ",
-        "  WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "  GROUP BY user_identity.email ",
-        ") ",
-        "SELECT CASE WHEN questions >= 50 AND active_days >= 10 THEN 'Power User' WHEN questions >= 10 AND active_days >= 3 THEN 'Regular' ELSE 'Casual' END AS engagement_tier, COUNT(*) AS user_count ",
-        "FROM user_stats GROUP BY 1 ORDER BY user_count DESC "
+        "WITH user_stats AS (   SELECT user_identity.email AS user_email, COUNT(*) AS questions, COUNT(DISTINCT event_date) AS active_days   FROM system.access.audit   WHERE service_name = 'aibiGenie'     AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL   GROUP BY user_identity.email ) SELECT CASE WHEN questions >= 50 AND active_days >= 10 THEN 'Power User' WHEN questions >= 10 AND active_days >= 3 THEN 'Regular' ELSE 'Casual' END AS engagement_tier, COUNT(*) AS user_count FROM user_stats GROUP BY 1 ORDER BY user_count DESC "
       ]
     },
     {
       "name": "ds_weekly_new_users",
       "displayName": "Weekly New Users",
       "queryLines": [
-        "WITH first_use AS ( ",
-        "  SELECT user_identity.email AS user_email, MIN(event_date) AS first_date ",
-        "  FROM system.access.audit ",
-        "  WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "  GROUP BY user_identity.email ",
-        ") ",
-        "SELECT DATE_TRUNC('WEEK', first_date) AS week_start, COUNT(*) AS new_users ",
-        "FROM first_use GROUP BY DATE_TRUNC('WEEK', first_date) ORDER BY week_start "
+        "WITH first_use AS (   SELECT user_identity.email AS user_email, MIN(event_date) AS first_date   FROM system.access.audit   WHERE service_name = 'aibiGenie'     AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL   GROUP BY user_identity.email ) SELECT DATE_TRUNC('WEEK', first_date) AS week_start, COUNT(*) AS new_users FROM first_use GROUP BY DATE_TRUNC('WEEK', first_date) ORDER BY week_start "
       ]
     },
     {
       "name": "ds_stickiness",
       "displayName": "Stickiness WAU/MAU",
       "queryLines": [
-        "WITH weekly_users AS ( ",
-        "  SELECT DATE_TRUNC('MONTH', event_date) AS month_start, DATE_TRUNC('WEEK', event_date) AS week_start, COUNT(DISTINCT user_identity.email) AS wau ",
-        "  FROM system.access.audit ",
-        "  WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "  GROUP BY DATE_TRUNC('MONTH', event_date), DATE_TRUNC('WEEK', event_date) ",
-        "), ",
-        "monthly_users AS ( ",
-        "  SELECT DATE_TRUNC('MONTH', event_date) AS month_start, COUNT(DISTINCT user_identity.email) AS mau ",
-        "  FROM system.access.audit ",
-        "  WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "  GROUP BY DATE_TRUNC('MONTH', event_date) ",
-        ") ",
-        "SELECT m.month_start, m.mau, ROUND(AVG(w.wau), 0) AS avg_wau, ROUND(AVG(w.wau) * 1.0 / NULLIF(m.mau, 0), 2) AS stickiness_ratio ",
-        "FROM monthly_users m JOIN weekly_users w ON m.month_start = w.month_start ",
-        "GROUP BY m.month_start, m.mau ORDER BY m.month_start "
+        "WITH weekly_users AS (   SELECT DATE_TRUNC('MONTH', event_date) AS month_start, DATE_TRUNC('WEEK', event_date) AS week_start, COUNT(DISTINCT user_identity.email) AS wau   FROM system.access.audit   WHERE service_name = 'aibiGenie'     AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL   GROUP BY DATE_TRUNC('MONTH', event_date), DATE_TRUNC('WEEK', event_date) ), monthly_users AS (   SELECT DATE_TRUNC('MONTH', event_date) AS month_start, COUNT(DISTINCT user_identity.email) AS mau   FROM system.access.audit   WHERE service_name = 'aibiGenie'     AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL   GROUP BY DATE_TRUNC('MONTH', event_date) ) SELECT m.month_start, m.mau, ROUND(AVG(w.wau), 0) AS avg_wau, ROUND(AVG(w.wau) * 1.0 / NULLIF(m.mau, 0), 2) AS stickiness_ratio FROM monthly_users m JOIN weekly_users w ON m.month_start = w.month_start GROUP BY m.month_start, m.mau ORDER BY m.month_start "
       ]
     },
     {
       "name": "ds_conversation_depth",
       "displayName": "Conversation Depth",
       "queryLines": [
-        "WITH conversations AS ( ",
-        "  SELECT COALESCE(request_params['conversation_id'], request_id) AS conversation_id ",
-        "  FROM system.access.audit ",
-        "  WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "), ",
-        "conv_depth AS ( ",
-        "  SELECT conversation_id, COUNT(*) AS msg_count FROM conversations GROUP BY conversation_id ",
-        ") ",
-        "SELECT CASE WHEN msg_count = 1 THEN '1 message' WHEN msg_count = 2 THEN '2 messages' WHEN msg_count = 3 THEN '3 messages' WHEN msg_count BETWEEN 4 AND 5 THEN '4-5 messages' ELSE '6+ messages' END AS conversation_depth, COUNT(*) AS conversation_count ",
-        "FROM conv_depth GROUP BY 1 ORDER BY MIN(msg_count) "
+        "WITH conversations AS (   SELECT COALESCE(request_params['conversation_id'], request_id) AS conversation_id   FROM system.access.audit   WHERE service_name = 'aibiGenie'     AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL ), conv_depth AS (   SELECT conversation_id, COUNT(*) AS msg_count FROM conversations GROUP BY conversation_id ) SELECT CASE WHEN msg_count = 1 THEN '1 message' WHEN msg_count = 2 THEN '2 messages' WHEN msg_count = 3 THEN '3 messages' WHEN msg_count BETWEEN 4 AND 5 THEN '4-5 messages' ELSE '6+ messages' END AS conversation_depth, COUNT(*) AS conversation_count FROM conv_depth GROUP BY 1 ORDER BY MIN(msg_count) "
       ]
     },
     {
       "name": "ds_satisfaction_trend",
       "displayName": "Satisfaction Trend",
       "queryLines": [
-        "SELECT DATE_TRUNC('MONTH', event_date) AS month_start, ",
-        "  SUM(CASE WHEN request_params['feedback_rating'] = 'THUMBS_UP' THEN 1 ELSE 0 END) AS thumbs_up, ",
-        "  SUM(CASE WHEN request_params['feedback_rating'] = 'THUMBS_DOWN' THEN 1 ELSE 0 END) AS thumbs_down, ",
-        "  COUNT(*) AS total_feedback, ",
-        "  ROUND(SUM(CASE WHEN request_params['feedback_rating'] = 'THUMBS_UP' THEN 1 ELSE 0 END) * 1.0 / COUNT(*), 2) AS satisfaction_rate ",
-        "FROM system.access.audit ",
-        "WHERE service_name = 'aibiGenie' AND action_name = 'updateConversationMessageFeedback' ",
-        "GROUP BY DATE_TRUNC('MONTH', event_date) ORDER BY month_start "
+        "SELECT DATE_TRUNC('MONTH', event_date) AS month_start,   SUM(CASE WHEN request_params['feedback_rating'] = 'THUMBS_UP' THEN 1 ELSE 0 END) AS thumbs_up,   SUM(CASE WHEN request_params['feedback_rating'] = 'THUMBS_DOWN' THEN 1 ELSE 0 END) AS thumbs_down,   COUNT(*) AS total_feedback,   ROUND(SUM(CASE WHEN request_params['feedback_rating'] = 'THUMBS_UP' THEN 1 ELSE 0 END) * 1.0 / COUNT(*), 2) AS satisfaction_rate FROM system.access.audit WHERE service_name = 'aibiGenie' AND action_name = 'updateConversationMessageFeedback' GROUP BY DATE_TRUNC('MONTH', event_date) ORDER BY month_start "
       ]
     },
     {
       "name": "ds_health_kpis",
       "displayName": "Health KPIs",
       "queryLines": [
-        "WITH askers AS ( ",
-        "  SELECT user_identity.email AS email, event_date ",
-        "  FROM system.access.audit ",
-        "  WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "), ",
-        "dau AS (SELECT COUNT(DISTINCT email) AS dau FROM askers WHERE event_date = date_sub(current_date(), 1)), ",
-        "wau AS (SELECT COUNT(DISTINCT email) AS wau FROM askers WHERE event_date >= date_sub(current_date(), 7)), ",
-        "mau AS (SELECT COUNT(DISTINCT email) AS mau FROM askers WHERE event_date >= date_sub(current_date(), 28)), ",
-        "viewers AS (SELECT COUNT(DISTINCT user_identity.email) AS viewer_count FROM system.access.audit WHERE service_name = 'aibiGenie' AND action_name IN ('getSpace', 'genieGetSpace') AND event_date >= date_sub(current_date(), 28)), ",
-        "asker_count AS (SELECT COUNT(DISTINCT email) AS asker_count FROM askers WHERE event_date >= date_sub(current_date(), 28)), ",
-        "repeat_users AS ( ",
-        "  SELECT COUNT(DISTINCT a1.email) AS repeat_count FROM askers a1 ",
-        "  INNER JOIN askers a2 ON a1.email = a2.email AND a2.event_date > a1.event_date AND a2.event_date <= date_add(a1.event_date, 7) ",
-        "  WHERE a1.event_date >= date_sub(current_date(), 28) ",
-        "), ",
-        "space_counts AS ( ",
-        "  SELECT COUNT(DISTINCT request_params['space_id']) AS total_spaces, ",
-        "    COUNT(DISTINCT CASE WHEN DATEDIFF(current_date(), event_date) > 30 AND request_params['space_id'] NOT IN ( ",
-        "      SELECT DISTINCT request_params['space_id'] FROM system.access.audit WHERE service_name = 'aibiGenie' ",
-        "        AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "        AND request_params['space_id'] IS NOT NULL AND event_date >= date_sub(current_date(), 30) ",
-        "    ) THEN request_params['space_id'] END) AS stale_spaces ",
-        "  FROM system.access.audit WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "), ",
-        "query_stats AS ( ",
-        "  SELECT ROUND(SUM(CASE WHEN execution_status = 'FAILED' THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0), 3) AS unanswered_rate, ",
-        "    ROUND(AVG(total_duration_ms) / 1000.0, 1) AS avg_latency_sec, ",
-        "    ROUND(PERCENTILE(total_duration_ms, 0.5) / 1000.0, 1) AS p50_latency_sec, ",
-        "    ROUND(SUM(total_duration_ms) / 1000.0 / 3600.0, 2) AS total_compute_hours ",
-        "  FROM system.query.history WHERE query_source.genie_space_id IS NOT NULL AND start_time >= date_sub(current_date(), 28) ",
-        ") ",
-        "SELECT (SELECT dau FROM dau) AS dau, (SELECT wau FROM wau) AS trailing_7d_users, (SELECT mau FROM mau) AS trailing_28d_users, ",
-        "  ROUND((SELECT asker_count FROM asker_count) * 1.0 / NULLIF((SELECT viewer_count FROM viewers), 0), 2) AS login_to_use_pct, ",
-        "  ROUND((SELECT repeat_count FROM repeat_users) * 1.0 / NULLIF((SELECT asker_count FROM asker_count), 0), 2) AS repeat_usage_rate, ",
-        "  (SELECT unanswered_rate FROM query_stats) AS unanswered_rate, ",
-        "  (SELECT avg_latency_sec FROM query_stats) AS avg_latency_sec, ",
-        "  (SELECT p50_latency_sec FROM query_stats) AS p50_latency_sec, ",
-        "  (SELECT total_compute_hours FROM query_stats) AS query_cost_hours, ",
-        "  (SELECT total_spaces FROM space_counts) AS total_spaces, ",
-        "  (SELECT stale_spaces FROM space_counts) AS stale_spaces "
+        "WITH askers AS (   SELECT user_identity.email AS email, event_date   FROM system.access.audit   WHERE service_name = 'aibiGenie'     AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL ), dau AS (SELECT COUNT(DISTINCT email) AS dau FROM askers WHERE event_date = date_sub(current_date(), 1)), wau AS (SELECT COUNT(DISTINCT email) AS wau FROM askers WHERE event_date >= date_sub(current_date(), 7)), mau AS (SELECT COUNT(DISTINCT email) AS mau FROM askers WHERE event_date >= date_sub(current_date(), 28)), viewers AS (SELECT COUNT(DISTINCT user_identity.email) AS viewer_count FROM system.access.audit WHERE service_name = 'aibiGenie' AND action_name IN ('getSpace', 'genieGetSpace') AND event_date >= date_sub(current_date(), 28)), asker_count AS (SELECT COUNT(DISTINCT email) AS asker_count FROM askers WHERE event_date >= date_sub(current_date(), 28)), repeat_users AS (   SELECT COUNT(DISTINCT a1.email) AS repeat_count FROM askers a1   INNER JOIN askers a2 ON a1.email = a2.email AND a2.event_date > a1.event_date AND a2.event_date <= date_add(a1.event_date, 7)   WHERE a1.event_date >= date_sub(current_date(), 28) ), space_counts AS (   SELECT COUNT(DISTINCT request_params['space_id']) AS total_spaces,     COUNT(DISTINCT CASE WHEN DATEDIFF(current_date(), event_date) > 30 AND request_params['space_id'] NOT IN (       SELECT DISTINCT request_params['space_id'] FROM system.access.audit WHERE service_name = 'aibiGenie'         AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')         AND request_params['space_id'] IS NOT NULL AND event_date >= date_sub(current_date(), 30)     ) THEN request_params['space_id'] END) AS stale_spaces   FROM system.access.audit WHERE service_name = 'aibiGenie'     AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL ), query_stats AS (   SELECT ROUND(SUM(CASE WHEN execution_status = 'FAILED' THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0), 3) AS unanswered_rate,     ROUND(AVG(total_duration_ms) / 1000.0, 1) AS avg_latency_sec,     ROUND(PERCENTILE(total_duration_ms, 0.5) / 1000.0, 1) AS p50_latency_sec,     ROUND(SUM(total_duration_ms) / 1000.0 / 3600.0, 2) AS total_compute_hours   FROM system.query.history WHERE query_source.genie_space_id IS NOT NULL AND start_time >= date_sub(current_date(), 28) ) SELECT (SELECT dau FROM dau) AS dau, (SELECT wau FROM wau) AS trailing_7d_users, (SELECT mau FROM mau) AS trailing_28d_users,   ROUND((SELECT asker_count FROM asker_count) * 1.0 / NULLIF((SELECT viewer_count FROM viewers), 0), 2) AS login_to_use_pct,   ROUND((SELECT repeat_count FROM repeat_users) * 1.0 / NULLIF((SELECT asker_count FROM asker_count), 0), 2) AS repeat_usage_rate,   (SELECT unanswered_rate FROM query_stats) AS unanswered_rate,   (SELECT avg_latency_sec FROM query_stats) AS avg_latency_sec,   (SELECT p50_latency_sec FROM query_stats) AS p50_latency_sec,   (SELECT total_compute_hours FROM query_stats) AS query_cost_hours,   (SELECT total_spaces FROM space_counts) AS total_spaces,   (SELECT stale_spaces FROM space_counts) AS stale_spaces "
       ]
     },
     {
       "name": "ds_dau_trend",
       "displayName": "DAU/WAU/MAU Trend",
       "queryLines": [
-        "WITH daily AS ( ",
-        "  SELECT event_date, user_identity.email AS email FROM system.access.audit ",
-        "  WHERE service_name = 'aibiGenie' AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "), dates AS (SELECT DISTINCT event_date AS dt FROM daily) ",
-        "SELECT d.dt AS event_date, ",
-        "  (SELECT COUNT(DISTINCT email) FROM daily WHERE event_date = d.dt) AS dau, ",
-        "  (SELECT COUNT(DISTINCT email) FROM daily WHERE event_date BETWEEN date_sub(d.dt, 6) AND d.dt) AS trailing_7d, ",
-        "  (SELECT COUNT(DISTINCT email) FROM daily WHERE event_date BETWEEN date_sub(d.dt, 27) AND d.dt) AS trailing_28d ",
-        "FROM dates d ORDER BY d.dt "
+        "WITH daily AS (   SELECT event_date, user_identity.email AS email FROM system.access.audit   WHERE service_name = 'aibiGenie' AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL ), dates AS (SELECT DISTINCT event_date AS dt FROM daily) SELECT d.dt AS event_date,   (SELECT COUNT(DISTINCT email) FROM daily WHERE event_date = d.dt) AS dau,   (SELECT COUNT(DISTINCT email) FROM daily WHERE event_date BETWEEN date_sub(d.dt, 6) AND d.dt) AS trailing_7d,   (SELECT COUNT(DISTINCT email) FROM daily WHERE event_date BETWEEN date_sub(d.dt, 27) AND d.dt) AS trailing_28d FROM dates d ORDER BY d.dt "
       ]
     },
     {
       "name": "ds_repeat_trend",
       "displayName": "Repeat Usage Trend",
       "queryLines": [
-        "WITH askers AS ( ",
-        "  SELECT user_identity.email AS email, event_date FROM system.access.audit ",
-        "  WHERE service_name = 'aibiGenie' AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "), ",
-        "monthly_askers AS (SELECT DATE_TRUNC('MONTH', event_date) AS month_start, email, MIN(event_date) AS first_ask FROM askers GROUP BY DATE_TRUNC('MONTH', event_date), email), ",
-        "returners AS ( ",
-        "  SELECT ma.month_start, ma.email FROM monthly_askers ma ",
-        "  INNER JOIN askers a2 ON ma.email = a2.email AND a2.event_date > ma.first_ask AND a2.event_date <= date_add(ma.first_ask, 7) ",
-        "  GROUP BY ma.month_start, ma.email ",
-        ") ",
-        "SELECT ma.month_start, COUNT(DISTINCT ma.email) AS total_askers, COUNT(DISTINCT r.email) AS returners, ",
-        "  ROUND(COUNT(DISTINCT r.email) * 1.0 / NULLIF(COUNT(DISTINCT ma.email), 0), 2) AS repeat_rate ",
-        "FROM monthly_askers ma LEFT JOIN returners r ON ma.month_start = r.month_start AND ma.email = r.email ",
-        "GROUP BY ma.month_start ORDER BY ma.month_start "
+        "WITH askers AS (   SELECT user_identity.email AS email, event_date FROM system.access.audit   WHERE service_name = 'aibiGenie' AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL ), monthly_askers AS (SELECT DATE_TRUNC('MONTH', event_date) AS month_start, email, MIN(event_date) AS first_ask FROM askers GROUP BY DATE_TRUNC('MONTH', event_date), email), returners AS (   SELECT ma.month_start, ma.email FROM monthly_askers ma   INNER JOIN askers a2 ON ma.email = a2.email AND a2.event_date > ma.first_ask AND a2.event_date <= date_add(ma.first_ask, 7)   GROUP BY ma.month_start, ma.email ) SELECT ma.month_start, COUNT(DISTINCT ma.email) AS total_askers, COUNT(DISTINCT r.email) AS returners,   ROUND(COUNT(DISTINCT r.email) * 1.0 / NULLIF(COUNT(DISTINCT ma.email), 0), 2) AS repeat_rate FROM monthly_askers ma LEFT JOIN returners r ON ma.month_start = r.month_start AND ma.email = r.email GROUP BY ma.month_start ORDER BY ma.month_start "
       ]
     },
     {
       "name": "ds_latency_trend",
       "displayName": "Latency & Quality Trend",
       "queryLines": [
-        "SELECT DATE_TRUNC('MONTH', start_time) AS month_start, COUNT(*) AS total_queries, ",
-        "  SUM(CASE WHEN execution_status = 'FAILED' THEN 1 ELSE 0 END) AS failed_queries, ",
-        "  ROUND(SUM(CASE WHEN execution_status = 'FAILED' THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0), 3) AS unanswered_rate, ",
-        "  ROUND(AVG(total_duration_ms) / 1000.0, 1) AS avg_latency_sec, ",
-        "  ROUND(PERCENTILE(total_duration_ms, 0.5) / 1000.0, 1) AS p50_latency_sec, ",
-        "  ROUND(PERCENTILE(total_duration_ms, 0.95) / 1000.0, 1) AS p95_latency_sec, ",
-        "  ROUND(SUM(total_duration_ms) / 1000.0 / 3600.0, 2) AS compute_hours ",
-        "FROM system.query.history WHERE query_source.genie_space_id IS NOT NULL AND start_time IS NOT NULL ",
-        "GROUP BY DATE_TRUNC('MONTH', start_time) ORDER BY month_start "
+        "SELECT DATE_TRUNC('MONTH', start_time) AS month_start, COUNT(*) AS total_queries,   SUM(CASE WHEN execution_status = 'FAILED' THEN 1 ELSE 0 END) AS failed_queries,   ROUND(SUM(CASE WHEN execution_status = 'FAILED' THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(*), 0), 3) AS unanswered_rate,   ROUND(AVG(total_duration_ms) / 1000.0, 1) AS avg_latency_sec,   ROUND(PERCENTILE(total_duration_ms, 0.5) / 1000.0, 1) AS p50_latency_sec,   ROUND(PERCENTILE(total_duration_ms, 0.95) / 1000.0, 1) AS p95_latency_sec,   ROUND(SUM(total_duration_ms) / 1000.0 / 3600.0, 2) AS compute_hours FROM system.query.history WHERE query_source.genie_space_id IS NOT NULL AND start_time IS NOT NULL GROUP BY DATE_TRUNC('MONTH', start_time) ORDER BY month_start "
       ]
     },
     {
       "name": "ds_space_health",
       "displayName": "Space Health",
       "queryLines": [
-        "WITH space_last AS ( ",
-        "  SELECT request_params['space_id'] AS space_id, MAX(event_date) AS last_activity ",
-        "  FROM system.access.audit WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "  GROUP BY request_params['space_id'] ",
-        ") ",
-        "SELECT CASE WHEN DATEDIFF(current_date(), last_activity) <= 7 THEN 'Active (last 7 days)' ",
-        "  WHEN DATEDIFF(current_date(), last_activity) <= 30 THEN 'Cooling Off (8-30 days)' ",
-        "  ELSE 'Stale (30+ days)' END AS space_status, COUNT(*) AS space_count ",
-        "FROM space_last GROUP BY 1 "
+        "WITH space_last AS (   SELECT request_params['space_id'] AS space_id, MAX(event_date) AS last_activity   FROM system.access.audit WHERE service_name = 'aibiGenie'     AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL   GROUP BY request_params['space_id'] ) SELECT CASE WHEN DATEDIFF(current_date(), last_activity) <= 7 THEN 'Active (last 7 days)'   WHEN DATEDIFF(current_date(), last_activity) <= 30 THEN 'Cooling Off (8-30 days)'   ELSE 'Stale (30+ days)' END AS space_status, COUNT(*) AS space_count FROM space_last GROUP BY 1 "
       ]
     },
     {
       "name": "ds_genie_questions",
       "displayName": "Genie Questions",
       "queryLines": [
-        "SELECT ",
-        "  a.event_date, ",
-        "  a.user_identity.email AS email, ",
-        "  a.request_params['space_id'] AS space_id, ",
-        "  COALESCE(w.workspace_name, CAST(a.workspace_id AS STRING)) AS workspace_name, ",
-        "  COALESCE(sn.space_name, CONCAT('Unnamed (', LEFT(a.request_params['space_id'], 8), '...)')) AS space_name ",
-        "FROM system.access.audit a ",
-        "LEFT JOIN system.access.workspaces_latest w ON a.workspace_id = w.workspace_id ",
-        "LEFT JOIN ( ",
-        "  SELECT request_params['space_id'] AS space_id, ",
-        "    ANY_VALUE(request_params['display_name']) AS space_name ",
-        "  FROM system.access.audit WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('updateSpace', 'genieUpdateSpace') AND request_params['display_name'] IS NOT NULL ",
-        "  GROUP BY 1 ",
-        ") sn ON a.request_params['space_id'] = sn.space_id ",
-        "WHERE a.service_name = 'aibiGenie' ",
-        "  AND a.action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "  AND a.request_params['space_id'] IS NOT NULL "
+        "SELECT   a.event_date,   a.user_identity.email AS email,   a.request_params['space_id'] AS space_id,   COALESCE(w.workspace_name, CAST(a.workspace_id AS STRING)) AS workspace_name,   COALESCE(sn.space_name, CONCAT('Unnamed (', LEFT(a.request_params['space_id'], 8), '...)')) AS space_name FROM system.access.audit a LEFT JOIN system.access.workspaces_latest w ON a.workspace_id = w.workspace_id LEFT JOIN (   SELECT request_params['space_id'] AS space_id,     ANY_VALUE(request_params['display_name']) AS space_name   FROM system.access.audit WHERE service_name = 'aibiGenie'     AND action_name IN ('updateSpace', 'genieUpdateSpace') AND request_params['display_name'] IS NOT NULL   GROUP BY 1 ) sn ON a.request_params['space_id'] = sn.space_id WHERE a.service_name = 'aibiGenie'   AND a.action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')   AND a.request_params['space_id'] IS NOT NULL "
       ]
     },
     {
       "name": "ds_genie_feedback",
       "displayName": "Genie Feedback",
       "queryLines": [
-        "SELECT ",
-        "  a.event_date, ",
-        "  COALESCE(w.workspace_name, CAST(a.workspace_id AS STRING)) AS workspace_name, ",
-        "  COALESCE(sn.space_name, CONCAT('Unnamed (', LEFT(a.request_params['space_id'], 8), '...)')) AS space_name, ",
-        "  CASE WHEN a.request_params['feedback_rating'] = 'THUMBS_UP' THEN 1.0 ELSE 0.0 END AS is_positive ",
-        "FROM system.access.audit a ",
-        "LEFT JOIN system.access.workspaces_latest w ON a.workspace_id = w.workspace_id ",
-        "LEFT JOIN ( ",
-        "  SELECT request_params['space_id'] AS space_id, ",
-        "    ANY_VALUE(request_params['display_name']) AS space_name ",
-        "  FROM system.access.audit WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('updateSpace', 'genieUpdateSpace') AND request_params['display_name'] IS NOT NULL ",
-        "  GROUP BY 1 ",
-        ") sn ON a.request_params['space_id'] = sn.space_id ",
-        "WHERE a.service_name = 'aibiGenie' ",
-        "  AND a.action_name = 'updateConversationMessageFeedback' ",
-        "  AND a.request_params['space_id'] IS NOT NULL "
+        "SELECT   a.event_date,   COALESCE(w.workspace_name, CAST(a.workspace_id AS STRING)) AS workspace_name,   COALESCE(sn.space_name, CONCAT('Unnamed (', LEFT(a.request_params['space_id'], 8), '...)')) AS space_name,   CASE WHEN a.request_params['feedback_rating'] = 'THUMBS_UP' THEN 1.0 ELSE 0.0 END AS is_positive FROM system.access.audit a LEFT JOIN system.access.workspaces_latest w ON a.workspace_id = w.workspace_id LEFT JOIN (   SELECT request_params['space_id'] AS space_id,     ANY_VALUE(request_params['display_name']) AS space_name   FROM system.access.audit WHERE service_name = 'aibiGenie'     AND action_name IN ('updateSpace', 'genieUpdateSpace') AND request_params['display_name'] IS NOT NULL   GROUP BY 1 ) sn ON a.request_params['space_id'] = sn.space_id WHERE a.service_name = 'aibiGenie'   AND a.action_name = 'updateConversationMessageFeedback'   AND a.request_params['space_id'] IS NOT NULL "
       ]
     },
     {
       "name": "ds_genie_cost",
       "displayName": "Genie Cost",
       "queryLines": [
-        "WITH daily_warehouse AS ( ",
-        "  SELECT DATE(u.usage_start_time) AS event_date, usage_metadata.warehouse_id AS wh_id, u.workspace_id, ",
-        "    SUM(usage_quantity * CAST(lp.pricing.default AS DOUBLE)) AS total_cost_usd ",
-        "  FROM system.billing.usage u ",
-        "  LEFT JOIN system.billing.list_prices lp ON u.sku_name = lp.sku_name AND u.cloud = lp.cloud ",
-        "    AND u.usage_start_time >= lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time < lp.price_end_time) ",
-        "  WHERE u.billing_origin_product = 'SQL' AND usage_metadata.warehouse_id IS NOT NULL ",
-        "  GROUP BY 1, 2, 3 ",
-        "), ",
-        "daily_query_time AS ( ",
-        "  SELECT DATE(start_time) AS event_date, compute.warehouse_id AS wh_id, workspace_id, ",
-        "    SUM(total_duration_ms) AS total_ms, ",
-        "    SUM(CASE WHEN client_application = 'Databricks SQL Genie Space' THEN total_duration_ms ELSE 0 END) AS genie_ms, ",
-        "    SUM(CASE WHEN query_source.genie_space_id IS NOT NULL THEN total_duration_ms ELSE 0 END) AS genie_query_ms, ",
-        "    SUM(CASE WHEN query_source.genie_space_id IS NOT NULL THEN 1 ELSE 0 END) AS genie_query_count, ",
-        "    SUM(CASE WHEN query_source.genie_space_id IS NOT NULL AND execution_status = 'FAILED' THEN 1 ELSE 0 END) AS genie_failed_count, ",
-        "    SUM(CASE WHEN query_source.genie_space_id IS NOT NULL THEN read_bytes ELSE 0 END) AS genie_read_bytes ",
-        "  FROM system.query.history GROUP BY 1, 2, 3 ",
-        ") ",
-        "SELECT dw.event_date, ",
-        "  COALESCE(wl.workspace_name, CAST(dqt.workspace_id AS STRING)) AS workspace_name, ",
-        "  ROUND(SUM(dw.total_cost_usd * dqt.genie_ms / NULLIF(dqt.total_ms, 0)), 2) AS genie_cost_usd, ",
-        "  ROUND(SUM(dqt.genie_query_ms) / 1000.0 / 3600.0, 4) AS compute_hours, ",
-        "  ROUND(SUM(dqt.genie_read_bytes) / 1073741824.0, 2) AS gb_scanned, ",
-        "  SUM(dqt.genie_query_count) AS query_count, ",
-        "  SUM(dqt.genie_failed_count) AS failed_count ",
-        "FROM daily_warehouse dw ",
-        "JOIN daily_query_time dqt ON dw.event_date = dqt.event_date AND dw.wh_id = dqt.wh_id AND dw.workspace_id = dqt.workspace_id ",
-        "LEFT JOIN system.access.workspaces_latest wl ON dqt.workspace_id = wl.workspace_id ",
-        "WHERE dqt.genie_ms > 0 ",
-        "GROUP BY dw.event_date, COALESCE(wl.workspace_name, CAST(dqt.workspace_id AS STRING)) "
+        "WITH daily_warehouse AS (   SELECT DATE(u.usage_start_time) AS event_date, usage_metadata.warehouse_id AS wh_id, u.workspace_id,     SUM(usage_quantity * CAST(lp.pricing.default AS DOUBLE)) AS total_cost_usd   FROM system.billing.usage u   LEFT JOIN system.billing.list_prices lp ON u.sku_name = lp.sku_name AND u.cloud = lp.cloud     AND u.usage_start_time >= lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time < lp.price_end_time)   WHERE u.billing_origin_product = 'SQL' AND usage_metadata.warehouse_id IS NOT NULL   GROUP BY 1, 2, 3 ), daily_query_time AS (   SELECT DATE(start_time) AS event_date, compute.warehouse_id AS wh_id, workspace_id,     SUM(total_duration_ms) AS total_ms,     SUM(CASE WHEN client_application = 'Databricks SQL Genie Space' THEN total_duration_ms ELSE 0 END) AS genie_ms,     SUM(CASE WHEN query_source.genie_space_id IS NOT NULL THEN total_duration_ms ELSE 0 END) AS genie_query_ms,     SUM(CASE WHEN query_source.genie_space_id IS NOT NULL THEN 1 ELSE 0 END) AS genie_query_count,     SUM(CASE WHEN query_source.genie_space_id IS NOT NULL AND execution_status = 'FAILED' THEN 1 ELSE 0 END) AS genie_failed_count,     SUM(CASE WHEN query_source.genie_space_id IS NOT NULL THEN read_bytes ELSE 0 END) AS genie_read_bytes   FROM system.query.history GROUP BY 1, 2, 3 ) SELECT dw.event_date,   COALESCE(wl.workspace_name, CAST(dqt.workspace_id AS STRING)) AS workspace_name,   ROUND(SUM(dw.total_cost_usd * dqt.genie_ms / NULLIF(dqt.total_ms, 0)), 2) AS genie_cost_usd,   ROUND(SUM(dqt.genie_query_ms) / 1000.0 / 3600.0, 4) AS compute_hours,   ROUND(SUM(dqt.genie_read_bytes) / 1073741824.0, 2) AS gb_scanned,   SUM(dqt.genie_query_count) AS query_count,   SUM(dqt.genie_failed_count) AS failed_count FROM daily_warehouse dw JOIN daily_query_time dqt ON dw.event_date = dqt.event_date AND dw.wh_id = dqt.wh_id AND dw.workspace_id = dqt.workspace_id LEFT JOIN system.access.workspaces_latest wl ON dqt.workspace_id = wl.workspace_id WHERE dqt.genie_ms > 0 GROUP BY dw.event_date, COALESCE(wl.workspace_name, CAST(dqt.workspace_id AS STRING)) "
       ]
     },
     {
       "name": "ds_genie_daily_ratios",
       "displayName": "Genie Daily Ratios",
       "queryLines": [
-        "WITH daily_questions AS ( ",
-        "  SELECT event_date, ",
-        "    COUNT(*) AS questions, ",
-        "    COUNT(DISTINCT user_identity.email) AS users, ",
-        "    COUNT(DISTINCT request_params['space_id']) AS spaces ",
-        "  FROM system.access.audit ",
-        "  WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "  GROUP BY event_date ",
-        "), ",
-        "daily_cost AS ( ",
-        "  WITH dw AS ( ",
-        "    SELECT DATE(u.usage_start_time) AS event_date, usage_metadata.warehouse_id AS wh_id, u.workspace_id, ",
-        "      SUM(usage_quantity * CAST(lp.pricing.default AS DOUBLE)) AS total_cost_usd ",
-        "    FROM system.billing.usage u LEFT JOIN system.billing.list_prices lp ON u.sku_name = lp.sku_name AND u.cloud = lp.cloud ",
-        "      AND u.usage_start_time >= lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time < lp.price_end_time) ",
-        "    WHERE u.billing_origin_product = 'SQL' AND usage_metadata.warehouse_id IS NOT NULL GROUP BY 1, 2, 3 ",
-        "  ), dqt AS ( ",
-        "    SELECT DATE(start_time) AS event_date, compute.warehouse_id AS wh_id, workspace_id, ",
-        "      SUM(total_duration_ms) AS total_ms, SUM(CASE WHEN client_application = 'Databricks SQL Genie Space' THEN total_duration_ms ELSE 0 END) AS genie_ms ",
-        "    FROM system.query.history GROUP BY 1, 2, 3 ",
-        "  ) ",
-        "  SELECT dw.event_date, ROUND(SUM(dw.total_cost_usd * dqt.genie_ms / NULLIF(dqt.total_ms, 0)), 2) AS genie_cost_usd ",
-        "  FROM dw JOIN dqt ON dw.event_date = dqt.event_date AND dw.wh_id = dqt.wh_id AND dw.workspace_id = dqt.workspace_id ",
-        "  WHERE dqt.genie_ms > 0 GROUP BY dw.event_date ",
-        ") ",
-        "SELECT q.event_date, ",
-        "  ROUND(q.questions * 1.0 / q.users, 1) AS questions_per_user, ",
-        "  ROUND(COALESCE(c.genie_cost_usd, 0) / NULLIF(q.questions, 0), 4) AS cost_per_question, ",
-        "  ROUND(COALESCE(c.genie_cost_usd, 0) / NULLIF(q.users, 0), 2) AS cost_per_user, ",
-        "  ROUND(COALESCE(c.genie_cost_usd, 0) / NULLIF(q.spaces, 0), 2) AS cost_per_space ",
-        "FROM daily_questions q ",
-        "LEFT JOIN daily_cost c ON q.event_date = c.event_date "
+        "WITH daily_questions AS (   SELECT event_date,     COUNT(*) AS questions,     COUNT(DISTINCT user_identity.email) AS users,     COUNT(DISTINCT request_params['space_id']) AS spaces   FROM system.access.audit   WHERE service_name = 'aibiGenie'     AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL   GROUP BY event_date ), daily_cost AS (   WITH dw AS (     SELECT DATE(u.usage_start_time) AS event_date, usage_metadata.warehouse_id AS wh_id, u.workspace_id,       SUM(usage_quantity * CAST(lp.pricing.default AS DOUBLE)) AS total_cost_usd     FROM system.billing.usage u LEFT JOIN system.billing.list_prices lp ON u.sku_name = lp.sku_name AND u.cloud = lp.cloud       AND u.usage_start_time >= lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time < lp.price_end_time)     WHERE u.billing_origin_product = 'SQL' AND usage_metadata.warehouse_id IS NOT NULL GROUP BY 1, 2, 3   ), dqt AS (     SELECT DATE(start_time) AS event_date, compute.warehouse_id AS wh_id, workspace_id,       SUM(total_duration_ms) AS total_ms, SUM(CASE WHEN client_application = 'Databricks SQL Genie Space' THEN total_duration_ms ELSE 0 END) AS genie_ms     FROM system.query.history GROUP BY 1, 2, 3   )   SELECT dw.event_date, ROUND(SUM(dw.total_cost_usd * dqt.genie_ms / NULLIF(dqt.total_ms, 0)), 2) AS genie_cost_usd   FROM dw JOIN dqt ON dw.event_date = dqt.event_date AND dw.wh_id = dqt.wh_id AND dw.workspace_id = dqt.workspace_id   WHERE dqt.genie_ms > 0 GROUP BY dw.event_date ) SELECT q.event_date,   ROUND(q.questions * 1.0 / q.users, 1) AS questions_per_user,   ROUND(COALESCE(c.genie_cost_usd, 0) / NULLIF(q.questions, 0), 4) AS cost_per_question,   ROUND(COALESCE(c.genie_cost_usd, 0) / NULLIF(q.users, 0), 2) AS cost_per_user,   ROUND(COALESCE(c.genie_cost_usd, 0) / NULLIF(q.spaces, 0), 2) AS cost_per_space FROM daily_questions q LEFT JOIN daily_cost c ON q.event_date = c.event_date "
       ]
     },
     {
       "name": "ds_stale_spaces",
       "displayName": "Stale Spaces",
       "queryLines": [
-        "WITH space_last AS ( ",
-        "  SELECT request_params['space_id'] AS space_id, MAX(event_date) AS last_activity ",
-        "  FROM system.access.audit WHERE service_name = 'aibiGenie' ",
-        "    AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
-        "    AND request_params['space_id'] IS NOT NULL ",
-        "  GROUP BY request_params['space_id'] ",
-        ") ",
-        "SELECT ",
-        "  (SELECT COUNT(*) FROM space_last WHERE DATEDIFF(current_date(), last_activity) > 30) AS stale_spaces, ",
-        "  current_date() AS as_of_date "
+        "WITH space_last AS (   SELECT request_params['space_id'] AS space_id, MAX(event_date) AS last_activity   FROM system.access.audit WHERE service_name = 'aibiGenie'     AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage')     AND request_params['space_id'] IS NOT NULL   GROUP BY request_params['space_id'] ) SELECT   (SELECT COUNT(*) FROM space_last WHERE DATEDIFF(current_date(), last_activity) > 30) AS stale_spaces,   current_date() AS as_of_date "
       ]
     }
   ],
@@ -696,33 +409,17 @@
       "layout": [
         {
           "widget": {
-            "name": "exec-title",
-            "multilineTextboxSpec": {
-              "lines": [
-                "## Executive Summary"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 0,
-            "width": 12,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
             "name": "exec-s1",
             "multilineTextboxSpec": {
               "lines": [
-                "### Adoption"
+                "### Adoption & Engagement"
               ]
             }
           },
           "position": {
             "x": 0,
-            "y": 2,
-            "width": 6,
+            "y": 1,
+            "width": 12,
             "height": 1
           }
         },
@@ -731,14 +428,14 @@
             "name": "exec-s2",
             "multilineTextboxSpec": {
               "lines": [
-                "### Cost"
+                "### Cost & Averages"
               ]
             }
           },
           "position": {
-            "x": 6,
-            "y": 2,
-            "width": 6,
+            "x": 12,
+            "y": 1,
+            "width": 12,
             "height": 1
           }
         },
@@ -777,8 +474,8 @@
           },
           "position": {
             "x": 0,
-            "y": 3,
-            "width": 2,
+            "y": 2,
+            "width": 4,
             "height": 3
           }
         },
@@ -816,9 +513,9 @@
             }
           },
           "position": {
-            "x": 2,
-            "y": 3,
-            "width": 2,
+            "x": 4,
+            "y": 2,
+            "width": 4,
             "height": 3
           }
         },
@@ -856,9 +553,9 @@
             }
           },
           "position": {
-            "x": 4,
-            "y": 3,
-            "width": 2,
+            "x": 8,
+            "y": 2,
+            "width": 4,
             "height": 3
           }
         },
@@ -896,9 +593,9 @@
             }
           },
           "position": {
-            "x": 6,
-            "y": 3,
-            "width": 2,
+            "x": 12,
+            "y": 2,
+            "width": 4,
             "height": 3
           }
         },
@@ -936,9 +633,9 @@
             }
           },
           "position": {
-            "x": 8,
-            "y": 3,
-            "width": 2,
+            "x": 16,
+            "y": 2,
+            "width": 4,
             "height": 3
           }
         },
@@ -976,42 +673,10 @@
             }
           },
           "position": {
-            "x": 10,
-            "y": 3,
-            "width": 2,
+            "x": 20,
+            "y": 2,
+            "width": 4,
             "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "exec-s3",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Engagement"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 6,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "exec-s4",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Averages"
-              ]
-            }
-          },
-          "position": {
-            "x": 6,
-            "y": 6,
-            "width": 6,
-            "height": 1
           }
         },
         {
@@ -1049,8 +714,8 @@
           },
           "position": {
             "x": 0,
-            "y": 7,
-            "width": 2,
+            "y": 5,
+            "width": 4,
             "height": 3
           }
         },
@@ -1088,9 +753,9 @@
             }
           },
           "position": {
-            "x": 2,
-            "y": 7,
-            "width": 2,
+            "x": 4,
+            "y": 5,
+            "width": 4,
             "height": 3
           }
         },
@@ -1128,9 +793,9 @@
             }
           },
           "position": {
-            "x": 4,
-            "y": 7,
-            "width": 2,
+            "x": 8,
+            "y": 5,
+            "width": 4,
             "height": 3
           }
         },
@@ -1154,23 +819,23 @@
             ],
             "spec": {
               "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Avg Questions / User / Day"
+              },
               "widgetType": "counter",
               "encodings": {
                 "value": {
                   "fieldName": "avg(questions_per_user)",
                   "displayName": "Avg Q / User / Day"
                 }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Avg Q / User / Day"
               }
             }
           },
           "position": {
-            "x": 6,
-            "y": 7,
-            "width": 2,
+            "x": 12,
+            "y": 5,
+            "width": 4,
             "height": 3
           }
         },
@@ -1208,9 +873,9 @@
             }
           },
           "position": {
-            "x": 8,
-            "y": 7,
-            "width": 2,
+            "x": 16,
+            "y": 5,
+            "width": 4,
             "height": 3
           }
         },
@@ -1248,9 +913,9 @@
             }
           },
           "position": {
-            "x": 10,
-            "y": 7,
-            "width": 2,
+            "x": 20,
+            "y": 5,
+            "width": 4,
             "height": 3
           }
         },
@@ -1265,8 +930,8 @@
           },
           "position": {
             "x": 0,
-            "y": 10,
-            "width": 12,
+            "y": 8,
+            "width": 24,
             "height": 1
           }
         },
@@ -1339,8 +1004,8 @@
           },
           "position": {
             "x": 0,
-            "y": 11,
-            "width": 6,
+            "y": 9,
+            "width": 12,
             "height": 6
           }
         },
@@ -1392,9 +1057,9 @@
             }
           },
           "position": {
-            "x": 6,
-            "y": 11,
-            "width": 6,
+            "x": 12,
+            "y": 9,
+            "width": 12,
             "height": 6
           }
         },
@@ -1409,8 +1074,8 @@
           },
           "position": {
             "x": 0,
-            "y": 17,
-            "width": 12,
+            "y": 15,
+            "width": 24,
             "height": 1
           }
         },
@@ -1463,8 +1128,8 @@
           },
           "position": {
             "x": 0,
-            "y": 18,
-            "width": 4,
+            "y": 16,
+            "width": 8,
             "height": 5
           }
         },
@@ -1516,9 +1181,9 @@
             }
           },
           "position": {
-            "x": 4,
-            "y": 18,
-            "width": 4,
+            "x": 8,
+            "y": 16,
+            "width": 8,
             "height": 5
           }
         },
@@ -1570,9 +1235,9 @@
             }
           },
           "position": {
-            "x": 8,
-            "y": 18,
-            "width": 4,
+            "x": 16,
+            "y": 16,
+            "width": 8,
             "height": 5
           }
         },
@@ -1611,8 +1276,8 @@
           },
           "position": {
             "x": 0,
-            "y": 1,
-            "width": 6,
+            "y": 0,
+            "width": 12,
             "height": 1
           }
         },
@@ -1650,13 +1315,15 @@
             }
           },
           "position": {
-            "x": 6,
-            "y": 1,
-            "width": 6,
+            "x": 12,
+            "y": 0,
+            "width": 12,
             "height": 1
           }
         }
-      ]
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
     },
     {
       "name": "ws-drilldown",
@@ -1664,18 +1331,82 @@
       "layout": [
         {
           "widget": {
-            "name": "ws-title",
-            "multilineTextboxSpec": {
-              "lines": [
-                "## Workspaces"
-              ]
+            "name": "ws-date-from",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_genie_questions",
+                  "fields": [
+                    {
+                      "name": "min(event_date)",
+                      "expression": "MIN(`event_date`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "min(event_date)",
+                  "displayName": "From"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "From"
+              }
             }
           },
           "position": {
             "x": 0,
             "y": 0,
             "width": 6,
-            "height": 2
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "ws-date-to",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_genie_questions",
+                  "fields": [
+                    {
+                      "name": "max(event_date)",
+                      "expression": "MAX(`event_date`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max(event_date)",
+                  "displayName": "To"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "To"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 6,
+            "height": 1
           }
         },
         {
@@ -1719,10 +1450,10 @@
             }
           },
           "position": {
-            "x": 6,
+            "x": 12,
             "y": 0,
-            "width": 6,
-            "height": 2
+            "width": 12,
+            "height": 1
           }
         },
         {
@@ -1730,14 +1461,14 @@
             "name": "ws-s1",
             "multilineTextboxSpec": {
               "lines": [
-                "### Adoption"
+                "### Adoption & Engagement"
               ]
             }
           },
           "position": {
             "x": 0,
-            "y": 2,
-            "width": 6,
+            "y": 1,
+            "width": 12,
             "height": 1
           }
         },
@@ -1746,20 +1477,20 @@
             "name": "ws-s2",
             "multilineTextboxSpec": {
               "lines": [
-                "### Cost"
+                "### Cost & Averages"
               ]
             }
           },
           "position": {
-            "x": 6,
-            "y": 2,
-            "width": 6,
+            "x": 12,
+            "y": 1,
+            "width": 12,
             "height": 1
           }
         },
         {
           "widget": {
-            "name": "ws-kpi-spaces",
+            "name": "ws-total-spaces",
             "queries": [
               {
                 "name": "main_query",
@@ -1781,25 +1512,25 @@
               "encodings": {
                 "value": {
                   "fieldName": "countdistinct(space_id)",
-                  "displayName": "Spaces"
+                  "displayName": "Total Spaces"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Spaces"
+                "title": "Total Spaces"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 3,
-            "width": 2,
+            "y": 2,
+            "width": 4,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "ws-users",
+            "name": "ws-active-users",
             "queries": [
               {
                 "name": "main_query",
@@ -1821,25 +1552,25 @@
               "encodings": {
                 "value": {
                   "fieldName": "countdistinct(email)",
-                  "displayName": "Users"
+                  "displayName": "Active Users"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Users"
+                "title": "Active Users"
               }
             }
           },
           "position": {
-            "x": 2,
-            "y": 3,
-            "width": 2,
+            "x": 4,
+            "y": 2,
+            "width": 4,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "ws-questions",
+            "name": "ws-total-questions",
             "queries": [
               {
                 "name": "main_query",
@@ -1861,25 +1592,25 @@
               "encodings": {
                 "value": {
                   "fieldName": "count(email)",
-                  "displayName": "Questions"
+                  "displayName": "Questions Asked"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Questions"
+                "title": "Questions Asked"
               }
             }
           },
           "position": {
-            "x": 4,
-            "y": 3,
-            "width": 2,
+            "x": 8,
+            "y": 2,
+            "width": 4,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "ws-cost",
+            "name": "ws-genie-cost",
             "queries": [
               {
                 "name": "main_query",
@@ -1911,15 +1642,15 @@
             }
           },
           "position": {
-            "x": 6,
-            "y": 3,
-            "width": 2,
+            "x": 12,
+            "y": 2,
+            "width": 4,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "ws-compute",
+            "name": "ws-compute-hrs",
             "queries": [
               {
                 "name": "main_query",
@@ -1951,9 +1682,9 @@
             }
           },
           "position": {
-            "x": 8,
-            "y": 3,
-            "width": 2,
+            "x": 16,
+            "y": 2,
+            "width": 4,
             "height": 3
           }
         },
@@ -1991,42 +1722,10 @@
             }
           },
           "position": {
-            "x": 10,
-            "y": 3,
-            "width": 2,
+            "x": 20,
+            "y": 2,
+            "width": 4,
             "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "ws-s3",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Engagement"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 6,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "ws-s4",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Averages"
-              ]
-            }
-          },
-          "position": {
-            "x": 6,
-            "y": 6,
-            "width": 6,
-            "height": 1
           }
         },
         {
@@ -2064,26 +1763,26 @@
           },
           "position": {
             "x": 0,
-            "y": 7,
-            "width": 2,
+            "y": 5,
+            "width": 4,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "ws-fail-rate",
+            "name": "ws-stale",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_genie_cost",
+                  "datasetName": "ds_stale_spaces",
                   "fields": [
                     {
-                      "name": "sum(failed_count)",
-                      "expression": "SUM(`failed_count`)"
+                      "name": "stale_spaces",
+                      "expression": "`stale_spaces`"
                     }
                   ],
-                  "disaggregated": false
+                  "disaggregated": true
                 }
               }
             ],
@@ -2092,60 +1791,60 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "sum(failed_count)",
-                  "displayName": "Failed Queries"
+                  "fieldName": "stale_spaces",
+                  "displayName": "Stale Spaces"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Failed Queries"
-              }
-            }
-          },
-          "position": {
-            "x": 2,
-            "y": 7,
-            "width": 2,
-            "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "ws-query-count",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_genie_cost",
-                  "fields": [
-                    {
-                      "name": "sum(query_count)",
-                      "expression": "SUM(`query_count`)"
-                    }
-                  ],
-                  "disaggregated": false
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": {
-                  "fieldName": "sum(query_count)",
-                  "displayName": "SQL Queries"
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "SQL Queries"
+                "title": "Stale Spaces"
               }
             }
           },
           "position": {
             "x": 4,
-            "y": 7,
-            "width": 2,
+            "y": 5,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "ws-dau",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_genie_questions",
+                  "fields": [
+                    {
+                      "name": "countdistinct(event_date)",
+                      "expression": "COUNT(DISTINCT `event_date`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "countdistinct(event_date)",
+                  "displayName": "Active Days"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Active Days"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 5,
+            "width": 4,
             "height": 3
           }
         },
@@ -2169,23 +1868,23 @@
             ],
             "spec": {
               "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Avg Questions / User / Day"
+              },
               "widgetType": "counter",
               "encodings": {
                 "value": {
                   "fieldName": "avg(questions_per_user)",
                   "displayName": "Avg Q / User / Day"
                 }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Avg Q / User / Day"
               }
             }
           },
           "position": {
-            "x": 6,
-            "y": 7,
-            "width": 2,
+            "x": 12,
+            "y": 5,
+            "width": 4,
             "height": 3
           }
         },
@@ -2223,9 +1922,9 @@
             }
           },
           "position": {
-            "x": 8,
-            "y": 7,
-            "width": 2,
+            "x": 16,
+            "y": 5,
+            "width": 4,
             "height": 3
           }
         },
@@ -2263,9 +1962,9 @@
             }
           },
           "position": {
-            "x": 10,
-            "y": 7,
-            "width": 2,
+            "x": 20,
+            "y": 5,
+            "width": 4,
             "height": 3
           }
         },
@@ -2274,40 +1973,44 @@
             "name": "ws-s5",
             "multilineTextboxSpec": {
               "lines": [
-                "### Activity"
+                "### Trends"
               ]
             }
           },
           "position": {
             "x": 0,
-            "y": 10,
-            "width": 12,
+            "y": 8,
+            "width": 24,
             "height": 1
           }
         },
         {
           "widget": {
-            "name": "ws-daily-questions",
+            "name": "ws-dau-trend",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_genie_questions",
+                  "datasetName": "ds_dau_trend",
                   "fields": [
                     {
                       "name": "daily(event_date)",
                       "expression": "DATE_TRUNC(\"DAY\", `event_date`)"
                     },
                     {
-                      "name": "count(email)",
-                      "expression": "COUNT(`email`)"
+                      "name": "dau",
+                      "expression": "`dau`"
                     },
                     {
-                      "name": "countdistinct(email)",
-                      "expression": "COUNT(DISTINCT `email`)"
+                      "name": "trailing_7d",
+                      "expression": "`trailing_7d`"
+                    },
+                    {
+                      "name": "trailing_28d",
+                      "expression": "`trailing_28d`"
                     }
                   ],
-                  "disaggregated": false
+                  "disaggregated": true
                 }
               }
             ],
@@ -2328,32 +2031,36 @@
                   },
                   "fields": [
                     {
-                      "fieldName": "count(email)",
-                      "displayName": "Questions"
+                      "fieldName": "dau",
+                      "displayName": "Daily Users"
                     },
                     {
-                      "fieldName": "countdistinct(email)",
-                      "displayName": "Users"
+                      "fieldName": "trailing_7d",
+                      "displayName": "Rolling 7-Day"
+                    },
+                    {
+                      "fieldName": "trailing_28d",
+                      "displayName": "Rolling 28-Day"
                     }
                   ]
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Daily Activity"
+                "title": "User Activity"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 11,
-            "width": 6,
-            "height": 5
+            "y": 9,
+            "width": 12,
+            "height": 6
           }
         },
         {
           "widget": {
-            "name": "ws-daily-cost",
+            "name": "ws-cost-trend",
             "queries": [
               {
                 "name": "main_query",
@@ -2399,10 +2106,10 @@
             }
           },
           "position": {
-            "x": 6,
-            "y": 11,
-            "width": 6,
-            "height": 5
+            "x": 12,
+            "y": 9,
+            "width": 12,
+            "height": 6
           }
         },
         {
@@ -2416,8 +2123,8 @@
           },
           "position": {
             "x": 0,
-            "y": 16,
-            "width": 12,
+            "y": 15,
+            "width": 24,
             "height": 1
           }
         },
@@ -2474,8 +2181,8 @@
           },
           "position": {
             "x": 0,
-            "y": 17,
-            "width": 12,
+            "y": 16,
+            "width": 24,
             "height": 6
           }
         },
@@ -2499,6 +2206,18 @@
                     {
                       "name": "count(email)",
                       "expression": "COUNT(`email`)"
+                    },
+                    {
+                      "name": "countdistinct(event_date)",
+                      "expression": "COUNT(DISTINCT `event_date`)"
+                    },
+                    {
+                      "name": "min(event_date)",
+                      "expression": "MIN(`event_date`)"
+                    },
+                    {
+                      "name": "max(event_date)",
+                      "expression": "MAX(`event_date`)"
                     }
                   ],
                   "disaggregated": false
@@ -2521,6 +2240,18 @@
                   {
                     "fieldName": "count(email)",
                     "displayName": "Questions"
+                  },
+                  {
+                    "fieldName": "countdistinct(event_date)",
+                    "displayName": "Days Active"
+                  },
+                  {
+                    "fieldName": "min(event_date)",
+                    "displayName": "First Active"
+                  },
+                  {
+                    "fieldName": "max(event_date)",
+                    "displayName": "Last Active"
                   }
                 ]
               },
@@ -2532,12 +2263,13 @@
           },
           "position": {
             "x": 0,
-            "y": 23,
-            "width": 12,
+            "y": 22,
+            "width": 24,
             "height": 6
           }
         }
-      ]
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
     },
     {
       "name": "all-spaces",
@@ -2545,18 +2277,82 @@
       "layout": [
         {
           "widget": {
-            "name": "sp-title",
-            "multilineTextboxSpec": {
-              "lines": [
-                "## Spaces"
-              ]
+            "name": "sp-date-from",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_genie_questions",
+                  "fields": [
+                    {
+                      "name": "min(event_date)",
+                      "expression": "MIN(`event_date`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "min(event_date)",
+                  "displayName": "From"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "From"
+              }
             }
           },
           "position": {
             "x": 0,
             "y": 0,
             "width": 6,
-            "height": 2
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "sp-date-to",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_genie_questions",
+                  "fields": [
+                    {
+                      "name": "max(event_date)",
+                      "expression": "MAX(`event_date`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max(event_date)",
+                  "displayName": "To"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "To"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 6,
+            "height": 1
           }
         },
         {
@@ -2600,10 +2396,10 @@
             }
           },
           "position": {
-            "x": 6,
+            "x": 12,
             "y": 0,
-            "width": 6,
-            "height": 2
+            "width": 12,
+            "height": 1
           }
         },
         {
@@ -2644,9 +2440,9 @@
           },
           "position": {
             "x": 0,
-            "y": 2,
-            "width": 12,
-            "height": 2
+            "y": 1,
+            "width": 24,
+            "height": 1
           }
         },
         {
@@ -2654,14 +2450,14 @@
             "name": "sp-s1",
             "multilineTextboxSpec": {
               "lines": [
-                "### Adoption"
+                "### Adoption & Engagement"
               ]
             }
           },
           "position": {
             "x": 0,
-            "y": 4,
-            "width": 6,
+            "y": 2,
+            "width": 12,
             "height": 1
           }
         },
@@ -2670,20 +2466,20 @@
             "name": "sp-s2",
             "multilineTextboxSpec": {
               "lines": [
-                "### Cost"
+                "### Cost & Averages"
               ]
             }
           },
           "position": {
-            "x": 6,
-            "y": 4,
-            "width": 6,
+            "x": 12,
+            "y": 2,
+            "width": 12,
             "height": 1
           }
         },
         {
           "widget": {
-            "name": "sp-spaces",
+            "name": "sp-total-spaces",
             "queries": [
               {
                 "name": "main_query",
@@ -2705,25 +2501,25 @@
               "encodings": {
                 "value": {
                   "fieldName": "countdistinct(space_id)",
-                  "displayName": "Spaces"
+                  "displayName": "Total Spaces"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Spaces"
+                "title": "Total Spaces"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 5,
-            "width": 2,
+            "y": 3,
+            "width": 4,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "sp-users",
+            "name": "sp-active-users",
             "queries": [
               {
                 "name": "main_query",
@@ -2745,25 +2541,25 @@
               "encodings": {
                 "value": {
                   "fieldName": "countdistinct(email)",
-                  "displayName": "Users"
+                  "displayName": "Active Users"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Users"
+                "title": "Active Users"
               }
             }
           },
           "position": {
-            "x": 2,
-            "y": 5,
-            "width": 2,
+            "x": 4,
+            "y": 3,
+            "width": 4,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "sp-questions",
+            "name": "sp-total-questions",
             "queries": [
               {
                 "name": "main_query",
@@ -2785,25 +2581,25 @@
               "encodings": {
                 "value": {
                   "fieldName": "count(email)",
-                  "displayName": "Questions"
+                  "displayName": "Questions Asked"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Questions"
+                "title": "Questions Asked"
               }
             }
           },
           "position": {
-            "x": 4,
-            "y": 5,
-            "width": 2,
+            "x": 8,
+            "y": 3,
+            "width": 4,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "sp-cost",
+            "name": "sp-genie-cost",
             "queries": [
               {
                 "name": "main_query",
@@ -2835,15 +2631,15 @@
             }
           },
           "position": {
-            "x": 6,
-            "y": 5,
-            "width": 2,
+            "x": 12,
+            "y": 3,
+            "width": 4,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "sp-compute",
+            "name": "sp-compute-hrs",
             "queries": [
               {
                 "name": "main_query",
@@ -2875,9 +2671,9 @@
             }
           },
           "position": {
-            "x": 8,
-            "y": 5,
-            "width": 2,
+            "x": 16,
+            "y": 3,
+            "width": 4,
             "height": 3
           }
         },
@@ -2915,42 +2711,10 @@
             }
           },
           "position": {
-            "x": 10,
-            "y": 5,
-            "width": 2,
+            "x": 20,
+            "y": 3,
+            "width": 4,
             "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "sp-s3",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Engagement"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 8,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "sp-s4",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Averages"
-              ]
-            }
-          },
-          "position": {
-            "x": 6,
-            "y": 8,
-            "width": 6,
-            "height": 1
           }
         },
         {
@@ -2988,26 +2752,26 @@
           },
           "position": {
             "x": 0,
-            "y": 9,
-            "width": 2,
+            "y": 6,
+            "width": 4,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "sp-failed",
+            "name": "sp-stale",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_genie_cost",
+                  "datasetName": "ds_stale_spaces",
                   "fields": [
                     {
-                      "name": "sum(failed_count)",
-                      "expression": "SUM(`failed_count`)"
+                      "name": "stale_spaces",
+                      "expression": "`stale_spaces`"
                     }
                   ],
-                  "disaggregated": false
+                  "disaggregated": true
                 }
               }
             ],
@@ -3016,60 +2780,60 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "sum(failed_count)",
-                  "displayName": "Failed Queries"
+                  "fieldName": "stale_spaces",
+                  "displayName": "Stale Spaces"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Failed Queries"
-              }
-            }
-          },
-          "position": {
-            "x": 2,
-            "y": 9,
-            "width": 2,
-            "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "sp-query-count",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_genie_cost",
-                  "fields": [
-                    {
-                      "name": "sum(query_count)",
-                      "expression": "SUM(`query_count`)"
-                    }
-                  ],
-                  "disaggregated": false
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": {
-                  "fieldName": "sum(query_count)",
-                  "displayName": "SQL Queries"
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "SQL Queries"
+                "title": "Stale Spaces"
               }
             }
           },
           "position": {
             "x": 4,
-            "y": 9,
-            "width": 2,
+            "y": 6,
+            "width": 4,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "sp-dau",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_genie_questions",
+                  "fields": [
+                    {
+                      "name": "countdistinct(event_date)",
+                      "expression": "COUNT(DISTINCT `event_date`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "countdistinct(event_date)",
+                  "displayName": "Active Days"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Active Days"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 6,
+            "width": 4,
             "height": 3
           }
         },
@@ -3093,23 +2857,23 @@
             ],
             "spec": {
               "version": 2,
+              "frame": {
+                "showTitle": true,
+                "title": "Avg Questions / User / Day"
+              },
               "widgetType": "counter",
               "encodings": {
                 "value": {
                   "fieldName": "avg(questions_per_user)",
                   "displayName": "Avg Q / User / Day"
                 }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Avg Q / User / Day"
               }
             }
           },
           "position": {
-            "x": 6,
-            "y": 9,
-            "width": 2,
+            "x": 12,
+            "y": 6,
+            "width": 4,
             "height": 3
           }
         },
@@ -3147,9 +2911,9 @@
             }
           },
           "position": {
-            "x": 8,
-            "y": 9,
-            "width": 2,
+            "x": 16,
+            "y": 6,
+            "width": 4,
             "height": 3
           }
         },
@@ -3187,9 +2951,9 @@
             }
           },
           "position": {
-            "x": 10,
-            "y": 9,
-            "width": 2,
+            "x": 20,
+            "y": 6,
+            "width": 4,
             "height": 3
           }
         },
@@ -3198,40 +2962,44 @@
             "name": "sp-s5",
             "multilineTextboxSpec": {
               "lines": [
-                "### Activity"
+                "### Trends"
               ]
             }
           },
           "position": {
             "x": 0,
-            "y": 12,
-            "width": 12,
+            "y": 9,
+            "width": 24,
             "height": 1
           }
         },
         {
           "widget": {
-            "name": "sp-daily-activity",
+            "name": "sp-dau-trend",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_genie_questions",
+                  "datasetName": "ds_dau_trend",
                   "fields": [
                     {
                       "name": "daily(event_date)",
                       "expression": "DATE_TRUNC(\"DAY\", `event_date`)"
                     },
                     {
-                      "name": "count(email)",
-                      "expression": "COUNT(`email`)"
+                      "name": "dau",
+                      "expression": "`dau`"
                     },
                     {
-                      "name": "countdistinct(email)",
-                      "expression": "COUNT(DISTINCT `email`)"
+                      "name": "trailing_7d",
+                      "expression": "`trailing_7d`"
+                    },
+                    {
+                      "name": "trailing_28d",
+                      "expression": "`trailing_28d`"
                     }
                   ],
-                  "disaggregated": false
+                  "disaggregated": true
                 }
               }
             ],
@@ -3252,81 +3020,85 @@
                   },
                   "fields": [
                     {
-                      "fieldName": "count(email)",
-                      "displayName": "Questions"
+                      "fieldName": "dau",
+                      "displayName": "Daily Users"
                     },
                     {
-                      "fieldName": "countdistinct(email)",
-                      "displayName": "Users"
+                      "fieldName": "trailing_7d",
+                      "displayName": "Rolling 7-Day"
+                    },
+                    {
+                      "fieldName": "trailing_28d",
+                      "displayName": "Rolling 28-Day"
                     }
                   ]
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Daily Activity"
+                "title": "User Activity"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 13,
-            "width": 6,
-            "height": 5
+            "y": 10,
+            "width": 12,
+            "height": 6
           }
         },
         {
           "widget": {
-            "name": "sp-health-pie",
+            "name": "sp-cost-trend",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_space_health",
+                  "datasetName": "ds_genie_cost",
                   "fields": [
                     {
-                      "name": "space_status",
-                      "expression": "`space_status`"
+                      "name": "daily(event_date)",
+                      "expression": "DATE_TRUNC(\"DAY\", `event_date`)"
                     },
                     {
-                      "name": "space_count",
-                      "expression": "`space_count`"
+                      "name": "sum(genie_cost_usd)",
+                      "expression": "SUM(`genie_cost_usd`)"
                     }
                   ],
-                  "disaggregated": true
+                  "disaggregated": false
                 }
               }
             ],
             "spec": {
               "version": 3,
-              "widgetType": "pie",
+              "widgetType": "bar",
               "encodings": {
-                "angle": {
-                  "fieldName": "space_count",
+                "x": {
+                  "fieldName": "daily(event_date)",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Date"
+                },
+                "y": {
+                  "fieldName": "sum(genie_cost_usd)",
                   "scale": {
                     "type": "quantitative"
                   },
-                  "displayName": "Spaces"
-                },
-                "color": {
-                  "fieldName": "space_status",
-                  "scale": {
-                    "type": "categorical"
-                  },
-                  "displayName": "Status"
+                  "displayName": "Cost ($)"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Space Health"
+                "title": "Daily Genie Cost"
               }
             }
           },
           "position": {
-            "x": 6,
-            "y": 13,
-            "width": 6,
-            "height": 5
+            "x": 12,
+            "y": 10,
+            "width": 12,
+            "height": 6
           }
         },
         {
@@ -3340,8 +3112,8 @@
           },
           "position": {
             "x": 0,
-            "y": 18,
-            "width": 12,
+            "y": 16,
+            "width": 24,
             "height": 1
           }
         },
@@ -3430,12 +3202,13 @@
           },
           "position": {
             "x": 0,
-            "y": 19,
-            "width": 12,
+            "y": 17,
+            "width": 24,
             "height": 8
           }
         }
-      ]
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
     },
     {
       "name": "growth-trends",
@@ -4756,7 +4529,6 @@
     {
       "name": "engagement-retention",
       "displayName": "Engagement & Retention",
-      "pageType": "PAGE_TYPE_CANVAS",
       "layout": [
         {
           "widget": {
@@ -5496,12 +5268,12 @@
             "height": 6
           }
         }
-      ]
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
     },
     {
       "name": "health-metrics",
       "displayName": "Health Metrics",
-      "pageType": "PAGE_TYPE_CANVAS",
       "layout": [
         {
           "widget": {
@@ -6415,7 +6187,8 @@
             "height": 6
           }
         }
-      ]
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
     },
     {
       "name": "readme",
@@ -6474,17 +6247,28 @@
             "name": "readme-kpi-body",
             "multilineTextboxSpec": {
               "lines": [
-                "**Total Spaces** \u2014 Distinct Genie Spaces with any question activity, ever.\n\n",
-                "**Active Spaces** \u2014 Spaces with at least one question in the last 30 days.\n\n",
-                "**Active Users** \u2014 Distinct users who asked at least one question.\n\n",
-                "**DAU** \u2014 Daily Active Users (yesterday).\n\n",
-                "**Repeat Rate (7d)** \u2014 Of all users who asked a question, what % came back to ask another within 7 days. Measures habit formation.\n\n",
-                "**Satisfaction** \u2014 Thumbs up / (thumbs up + thumbs down). Note: only ~4% of questions receive feedback.\n\n",
-                "**Genie Cost ($)** \u2014 Proportional SQL warehouse cost attributed to Genie queries (30d). Calculated as: warehouse_cost * (genie_query_time / total_query_time).\n\n",
-                "**Avg Cost / Space** \u2014 Total Genie cost divided by number of spaces.\n\n",
-                "**Avg Cost / Question** \u2014 Total Genie cost divided by number of questions asked.\n\n",
-                "**Avg Questions / User** \u2014 Total questions divided by total distinct users.\n\n",
-                "**Stale Spaces (30d+)** \u2014 Spaces with no question activity in over 30 days.\n\n",
+                "**Total Spaces** \u2014 Distinct Genie Spaces with any question activity, ever.\n",
+                "\n",
+                "**Active Spaces** \u2014 Spaces with at least one question in the last 30 days.\n",
+                "\n",
+                "**Active Users** \u2014 Distinct users who asked at least one question.\n",
+                "\n",
+                "**DAU** \u2014 Daily Active Users (yesterday).\n",
+                "\n",
+                "**Repeat Rate (7d)** \u2014 Of all users who asked a question, what % came back to ask another within 7 days. Measures habit formation.\n",
+                "\n",
+                "**Satisfaction** \u2014 Thumbs up / (thumbs up + thumbs down). Note: only ~4% of questions receive feedback.\n",
+                "\n",
+                "**Genie Cost ($)** \u2014 Proportional SQL warehouse cost attributed to Genie queries (30d). Calculated as: warehouse_cost * (genie_query_time / total_query_time).\n",
+                "\n",
+                "**Avg Cost / Space** \u2014 Total Genie cost divided by number of spaces.\n",
+                "\n",
+                "**Avg Cost / Question** \u2014 Total Genie cost divided by number of questions asked.\n",
+                "\n",
+                "**Avg Questions / User** \u2014 Total questions divided by total distinct users.\n",
+                "\n",
+                "**Stale Spaces (30d+)** \u2014 Spaces with no question activity in over 30 days.\n",
+                "\n",
                 "**Compute Hours** \u2014 Total SQL execution time for all Genie queries."
               ]
             }
