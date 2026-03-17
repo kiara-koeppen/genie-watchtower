@@ -121,9 +121,17 @@
     },
     {
       "name": "ds_monthly_trend",
-      "displayName": "Monthly Self-Service Trend",
+      "displayName": "Monthly Genie Trend",
       "queryLines": [
-        "SELECT   DATE_TRUNC('MONTH', start_time) AS month,   CASE     WHEN client_application = 'Databricks SQL Genie Space' THEN 'Genie Space'     WHEN query_source.dashboard_id IS NOT NULL THEN 'AI/BI Dashboard'   END AS source_type,   COUNT(*) AS queries,   COUNT(DISTINCT executed_by) AS users,   ROUND(SUM(total_duration_ms)/1000.0/3600.0, 2) AS compute_hours FROM system.query.history WHERE start_time >= date_sub(current_date(), 180)   AND (client_application = 'Databricks SQL Genie Space' OR query_source.dashboard_id IS NOT NULL) GROUP BY 1, 2 ORDER BY 1, 2"
+        "SELECT DATE_TRUNC('MONTH', start_time) AS month, ",
+        "  COUNT(*) AS queries, ",
+        "  COUNT(DISTINCT executed_by) AS users, ",
+        "  ROUND(SUM(total_duration_ms)/1000.0/3600.0, 2) AS compute_hours, ",
+        "  ROUND(SUM(read_bytes)/1073741824.0, 1) AS gb_scanned ",
+        "FROM system.query.history ",
+        "WHERE query_source.genie_space_id IS NOT NULL ",
+        "  AND start_time >= date_sub(current_date(), 180) ",
+        "GROUP BY 1 ORDER BY 1 "
       ]
     },
     {
@@ -461,24 +469,13 @@
         "  GROUP BY 1, 2 ",
         "), ",
         "query_time AS ( ",
-        "  SELECT compute.warehouse_id AS wh_id, workspace_id, ",
-        "    SUM(total_duration_ms) AS total_ms, ",
+        "  SELECT compute.warehouse_id AS wh_id, workspace_id, SUM(total_duration_ms) AS total_ms, ",
         "    SUM(CASE WHEN client_application = 'Databricks SQL Genie Space' THEN total_duration_ms ELSE 0 END) AS genie_ms ",
         "  FROM system.query.history WHERE start_time >= date_sub(current_date(), 30) GROUP BY 1, 2 ",
         "), ",
         "genie_cost AS ( ",
         "  SELECT ROUND(SUM(wc.total_cost_usd * qt.genie_ms / NULLIF(qt.total_ms, 0)), 2) AS cost_usd ",
-        "  FROM warehouse_costs wc ",
-        "  LEFT JOIN query_time qt ON wc.workspace_id = qt.workspace_id AND wc.wh_id = qt.wh_id ",
-        "), ",
-        "genie_queries AS ( ",
-        "  SELECT COUNT(*) AS total_queries, COUNT(DISTINCT executed_by) AS total_query_users, ",
-        "    ROUND(SUM(total_duration_ms)/1000.0/3600.0, 2) AS compute_hours, ",
-        "    ROUND(SUM(read_bytes)/1073741824.0, 1) AS gb_scanned, ",
-        "    ROUND(PERCENTILE(total_duration_ms, 0.5)/1000.0, 1) AS p50_latency, ",
-        "    ROUND(PERCENTILE(total_duration_ms, 0.95)/1000.0, 1) AS p95_latency, ",
-        "    SUM(CASE WHEN execution_status = 'FAILED' THEN 1 ELSE 0 END) AS failed ",
-        "  FROM system.query.history WHERE query_source.genie_space_id IS NOT NULL AND start_time >= date_sub(current_date(), 30) ",
+        "  FROM warehouse_costs wc LEFT JOIN query_time qt ON wc.workspace_id = qt.workspace_id AND wc.wh_id = qt.wh_id ",
         "), ",
         "activity AS ( ",
         "  SELECT user_identity.email AS email, event_date, request_params['space_id'] AS space_id ",
@@ -486,35 +483,33 @@
         "    AND action_name IN ('createConversationMessage', 'genieStartConversationMessage', 'genieCreateConversationMessage') ",
         "    AND request_params['space_id'] IS NOT NULL ",
         "), ",
+        "questions AS (SELECT COUNT(*) AS total_questions, COUNT(DISTINCT email) AS total_askers FROM activity), ",
         "space_health AS (SELECT space_id, MAX(event_date) AS last_dt FROM activity GROUP BY space_id), ",
         "feedback AS ( ",
-        "  SELECT SUM(CASE WHEN request_params['feedback_rating'] = 'THUMBS_UP' THEN 1 ELSE 0 END) AS up, ",
-        "    COUNT(*) AS total FROM system.access.audit ",
-        "  WHERE service_name = 'aibiGenie' AND action_name = 'updateConversationMessageFeedback' ",
+        "  SELECT SUM(CASE WHEN request_params['feedback_rating'] = 'THUMBS_UP' THEN 1 ELSE 0 END) AS up, COUNT(*) AS total ",
+        "  FROM system.access.audit WHERE service_name = 'aibiGenie' AND action_name = 'updateConversationMessageFeedback' ",
         "), ",
         "repeaters AS ( ",
         "  SELECT COUNT(DISTINCT a1.email) AS cnt FROM activity a1 ",
         "  INNER JOIN activity a2 ON a1.email = a2.email AND a2.event_date > a1.event_date AND a2.event_date <= date_add(a1.event_date, 7) ",
-        "  WHERE a1.event_date >= date_sub(current_date(), 28) ",
+        "), ",
+        "genie_queries AS ( ",
+        "  SELECT ROUND(SUM(total_duration_ms)/1000.0/3600.0, 2) AS compute_hours ",
+        "  FROM system.query.history WHERE query_source.genie_space_id IS NOT NULL ",
         ") ",
         "SELECT ",
         "  COUNT(DISTINCT a.space_id) AS total_spaces, ",
-        "  (SELECT COUNT(*) FROM space_health WHERE DATEDIFF(current_date(), last_dt) <= 7) AS active_spaces_7d, ",
-        "  (SELECT COUNT(*) FROM space_health WHERE DATEDIFF(current_date(), last_dt) > 30) AS stale_spaces, ",
-        "  COUNT(DISTINCT CASE WHEN a.event_date >= date_sub(current_date(), 28) THEN a.email END) AS active_users_28d, ",
+        "  (SELECT COUNT(*) FROM space_health WHERE DATEDIFF(current_date(), last_dt) <= 30) AS active_spaces, ",
+        "  COUNT(DISTINCT a.email) AS active_users, ",
         "  (SELECT COUNT(DISTINCT email) FROM activity WHERE event_date = date_sub(current_date(), 1)) AS dau, ",
-        "  ROUND((SELECT cnt FROM repeaters) * 1.0 / NULLIF(COUNT(DISTINCT CASE WHEN a.event_date >= date_sub(current_date(), 28) THEN a.email END), 0), 2) AS repeat_rate_7d, ",
+        "  ROUND((SELECT cnt FROM repeaters) * 1.0 / NULLIF((SELECT total_askers FROM questions), 0), 2) AS repeat_rate, ",
         "  ROUND((SELECT up FROM feedback) * 1.0 / NULLIF((SELECT total FROM feedback), 0), 2) AS satisfaction_rate, ",
-        "  ROUND((SELECT failed FROM genie_queries) * 1.0 / NULLIF((SELECT total_queries FROM genie_queries), 0), 3) AS query_fail_rate, ",
-        "  (SELECT cost_usd FROM genie_cost) AS total_genie_cost_usd, ",
-        "  ROUND((SELECT cost_usd FROM genie_cost) / NULLIF(COUNT(DISTINCT a.space_id), 0), 2) AS cost_per_space, ",
-        "  ROUND((SELECT cost_usd FROM genie_cost) / NULLIF((SELECT total_queries FROM genie_queries), 0), 4) AS cost_per_query, ",
-        "  ROUND((SELECT cost_usd FROM genie_cost) / NULLIF(COUNT(DISTINCT CASE WHEN a.event_date >= date_sub(current_date(), 28) THEN a.email END), 0), 2) AS cost_per_user, ",
-        "  (SELECT compute_hours FROM genie_queries) AS compute_hours_30d, ",
-        "  (SELECT gb_scanned FROM genie_queries) AS gb_scanned_30d, ",
-        "  (SELECT p50_latency FROM genie_queries) AS p50_latency_sec, ",
-        "  (SELECT p95_latency FROM genie_queries) AS p95_latency_sec, ",
-        "  (SELECT total_queries FROM genie_queries) AS total_queries_30d ",
+        "  (SELECT cost_usd FROM genie_cost) AS genie_cost_usd, ",
+        "  ROUND((SELECT cost_usd FROM genie_cost) / NULLIF(COUNT(DISTINCT a.space_id), 0), 2) AS avg_cost_per_space, ",
+        "  ROUND((SELECT cost_usd FROM genie_cost) / NULLIF((SELECT total_questions FROM questions), 0), 4) AS avg_cost_per_question, ",
+        "  ROUND((SELECT total_questions FROM questions) * 1.0 / NULLIF((SELECT total_askers FROM questions), 0), 1) AS avg_questions_per_user, ",
+        "  (SELECT COUNT(*) FROM space_health WHERE DATEDIFF(current_date(), last_dt) > 30) AS stale_spaces, ",
+        "  (SELECT compute_hours FROM genie_queries) AS compute_hours ",
         "FROM activity a "
       ]
     },
@@ -759,7 +754,7 @@
             "name": "exec-subtitle",
             "multilineTextboxSpec": {
               "lines": [
-                "Trailing 30-day metrics across all workspaces"
+                "Account-wide Genie Spaces metrics"
               ]
             }
           },
@@ -772,10 +767,10 @@
         },
         {
           "widget": {
-            "name": "exec-adoption-hdr",
+            "name": "exec-section-adopt",
             "multilineTextboxSpec": {
               "lines": [
-                "### Adoption"
+                "### Adoption & Engagement"
               ]
             }
           },
@@ -788,10 +783,10 @@
         },
         {
           "widget": {
-            "name": "exec-cost-hdr",
+            "name": "exec-section-cost",
             "multilineTextboxSpec": {
               "lines": [
-                "### Cost"
+                "### Cost & Operations"
               ]
             }
           },
@@ -804,7 +799,7 @@
         },
         {
           "widget": {
-            "name": "exec-total-spaces",
+            "name": "exec-kpi-spaces",
             "queries": [
               {
                 "name": "main_query",
@@ -844,7 +839,7 @@
         },
         {
           "widget": {
-            "name": "exec-active-7d",
+            "name": "exec-kpi-active-spaces",
             "queries": [
               {
                 "name": "main_query",
@@ -852,8 +847,8 @@
                   "datasetName": "ds_exec_consolidated",
                   "fields": [
                     {
-                      "name": "active_spaces_7d",
-                      "expression": "`active_spaces_7d`"
+                      "name": "active_spaces",
+                      "expression": "`active_spaces`"
                     }
                   ],
                   "disaggregated": true
@@ -865,13 +860,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "active_spaces_7d",
-                  "displayName": "Active Spaces 7d"
+                  "fieldName": "active_spaces",
+                  "displayName": "Active Spaces"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Active Spaces 7d"
+                "title": "Active Spaces"
               }
             }
           },
@@ -884,7 +879,7 @@
         },
         {
           "widget": {
-            "name": "exec-users-28d",
+            "name": "exec-kpi-users",
             "queries": [
               {
                 "name": "main_query",
@@ -892,8 +887,8 @@
                   "datasetName": "ds_exec_consolidated",
                   "fields": [
                     {
-                      "name": "active_users_28d",
-                      "expression": "`active_users_28d`"
+                      "name": "active_users",
+                      "expression": "`active_users`"
                     }
                   ],
                   "disaggregated": true
@@ -905,13 +900,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "active_users_28d",
-                  "displayName": "Active Users 28d"
+                  "fieldName": "active_users",
+                  "displayName": "Active Users"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Active Users 28d"
+                "title": "Active Users"
               }
             }
           },
@@ -924,7 +919,7 @@
         },
         {
           "widget": {
-            "name": "exec-genie-cost",
+            "name": "exec-kpi-cost",
             "queries": [
               {
                 "name": "main_query",
@@ -932,8 +927,8 @@
                   "datasetName": "ds_exec_consolidated",
                   "fields": [
                     {
-                      "name": "total_genie_cost_usd",
-                      "expression": "`total_genie_cost_usd`"
+                      "name": "genie_cost_usd",
+                      "expression": "`genie_cost_usd`"
                     }
                   ],
                   "disaggregated": true
@@ -945,22 +940,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "total_genie_cost_usd",
-                  "displayName": "Genie Cost $",
-                  "format": {
-                    "type": "number-currency",
-                    "currencyCode": "USD",
-                    "abbreviation": "compact",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 2
-                    }
-                  }
+                  "fieldName": "genie_cost_usd",
+                  "displayName": "Genie Cost ($)"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Genie Cost $"
+                "title": "Genie Cost ($)"
               }
             }
           },
@@ -973,7 +959,7 @@
         },
         {
           "widget": {
-            "name": "exec-cost-per-space",
+            "name": "exec-kpi-cost-space",
             "queries": [
               {
                 "name": "main_query",
@@ -981,8 +967,8 @@
                   "datasetName": "ds_exec_consolidated",
                   "fields": [
                     {
-                      "name": "cost_per_space",
-                      "expression": "`cost_per_space`"
+                      "name": "avg_cost_per_space",
+                      "expression": "`avg_cost_per_space`"
                     }
                   ],
                   "disaggregated": true
@@ -994,22 +980,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "cost_per_space",
-                  "displayName": "Cost/Space",
-                  "format": {
-                    "type": "number-currency",
-                    "currencyCode": "USD",
-                    "abbreviation": "compact",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 2
-                    }
-                  }
+                  "fieldName": "avg_cost_per_space",
+                  "displayName": "Avg Cost / Space"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Cost/Space"
+                "title": "Avg Cost / Space"
               }
             }
           },
@@ -1022,7 +999,7 @@
         },
         {
           "widget": {
-            "name": "exec-cost-per-query",
+            "name": "exec-kpi-cost-question",
             "queries": [
               {
                 "name": "main_query",
@@ -1030,8 +1007,8 @@
                   "datasetName": "ds_exec_consolidated",
                   "fields": [
                     {
-                      "name": "cost_per_query",
-                      "expression": "`cost_per_query`"
+                      "name": "avg_cost_per_question",
+                      "expression": "`avg_cost_per_question`"
                     }
                   ],
                   "disaggregated": true
@@ -1043,22 +1020,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "cost_per_query",
-                  "displayName": "Cost/Query",
-                  "format": {
-                    "type": "number-currency",
-                    "currencyCode": "USD",
-                    "abbreviation": "compact",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 4
-                    }
-                  }
+                  "fieldName": "avg_cost_per_question",
+                  "displayName": "Avg Cost / Question"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Cost/Query"
+                "title": "Avg Cost / Question"
               }
             }
           },
@@ -1071,39 +1039,7 @@
         },
         {
           "widget": {
-            "name": "exec-engage-hdr",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Engagement"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 6,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "exec-perf-hdr",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Performance"
-              ]
-            }
-          },
-          "position": {
-            "x": 6,
-            "y": 6,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "exec-dau",
+            "name": "exec-kpi-dau",
             "queries": [
               {
                 "name": "main_query",
@@ -1136,14 +1072,14 @@
           },
           "position": {
             "x": 0,
-            "y": 7,
+            "y": 6,
             "width": 2,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "exec-repeat-rate",
+            "name": "exec-kpi-repeat",
             "queries": [
               {
                 "name": "main_query",
@@ -1151,8 +1087,8 @@
                   "datasetName": "ds_exec_consolidated",
                   "fields": [
                     {
-                      "name": "repeat_rate_7d",
-                      "expression": "`repeat_rate_7d`"
+                      "name": "repeat_rate",
+                      "expression": "`repeat_rate`"
                     }
                   ],
                   "disaggregated": true
@@ -1164,33 +1100,26 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "repeat_rate_7d",
-                  "displayName": "Repeat Rate",
-                  "format": {
-                    "type": "number-percent",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 0
-                    }
-                  }
+                  "fieldName": "repeat_rate",
+                  "displayName": "Repeat Rate (7d)"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Repeat Rate"
+                "title": "Repeat Rate (7d)"
               }
             }
           },
           "position": {
             "x": 2,
-            "y": 7,
+            "y": 6,
             "width": 2,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "exec-satisfaction",
+            "name": "exec-kpi-satisfaction",
             "queries": [
               {
                 "name": "main_query",
@@ -1212,14 +1141,7 @@
               "encodings": {
                 "value": {
                   "fieldName": "satisfaction_rate",
-                  "displayName": "Satisfaction",
-                  "format": {
-                    "type": "number-percent",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 0
-                    }
-                  }
+                  "displayName": "Satisfaction"
                 }
               },
               "frame": {
@@ -1230,14 +1152,14 @@
           },
           "position": {
             "x": 4,
-            "y": 7,
+            "y": 6,
             "width": 2,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "exec-p50-latency",
+            "name": "exec-kpi-qpu",
             "queries": [
               {
                 "name": "main_query",
@@ -1245,8 +1167,8 @@
                   "datasetName": "ds_exec_consolidated",
                   "fields": [
                     {
-                      "name": "p50_latency_sec",
-                      "expression": "`p50_latency_sec`"
+                      "name": "avg_questions_per_user",
+                      "expression": "`avg_questions_per_user`"
                     }
                   ],
                   "disaggregated": true
@@ -1258,80 +1180,26 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "p50_latency_sec",
-                  "displayName": "P50 Latency",
-                  "format": {
-                    "type": "number-plain",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 1
-                    }
-                  }
+                  "fieldName": "avg_questions_per_user",
+                  "displayName": "Avg Q / User"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "P50 Latency"
+                "title": "Avg Q / User"
               }
             }
           },
           "position": {
             "x": 6,
-            "y": 7,
+            "y": 6,
             "width": 2,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "exec-fail-rate",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_exec_consolidated",
-                  "fields": [
-                    {
-                      "name": "query_fail_rate",
-                      "expression": "`query_fail_rate`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": {
-                  "fieldName": "query_fail_rate",
-                  "displayName": "Query Fail Rate",
-                  "format": {
-                    "type": "number-plain",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 3
-                    }
-                  }
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Query Fail Rate"
-              }
-            }
-          },
-          "position": {
-            "x": 8,
-            "y": 7,
-            "width": 2,
-            "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "exec-stale-spaces",
+            "name": "exec-kpi-stale",
             "queries": [
               {
                 "name": "main_query",
@@ -1353,25 +1221,65 @@
               "encodings": {
                 "value": {
                   "fieldName": "stale_spaces",
-                  "displayName": "Stale Spaces"
+                  "displayName": "Stale Spaces (30d+)"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Stale Spaces"
+                "title": "Stale Spaces (30d+)"
               }
             }
           },
           "position": {
-            "x": 10,
-            "y": 7,
+            "x": 8,
+            "y": 6,
             "width": 2,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "exec-trends-hdr",
+            "name": "exec-kpi-compute",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_exec_consolidated",
+                  "fields": [
+                    {
+                      "name": "compute_hours",
+                      "expression": "`compute_hours`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "compute_hours",
+                  "displayName": "Compute Hours"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Compute Hours"
+              }
+            }
+          },
+          "position": {
+            "x": 10,
+            "y": 6,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "exec-section-trends",
             "multilineTextboxSpec": {
               "lines": [
                 "### Trends"
@@ -1380,7 +1288,7 @@
           },
           "position": {
             "x": 0,
-            "y": 10,
+            "y": 9,
             "width": 12,
             "height": 1
           }
@@ -1395,8 +1303,8 @@
                   "datasetName": "ds_dau_trend",
                   "fields": [
                     {
-                      "name": "event_date",
-                      "expression": "`event_date`"
+                      "name": "daily(event_date)",
+                      "expression": "DATE_TRUNC(\"DAY\", `event_date`)"
                     },
                     {
                       "name": "dau",
@@ -1420,29 +1328,41 @@
               "widgetType": "line",
               "encodings": {
                 "x": {
-                  "fieldName": "event_date",
+                  "fieldName": "daily(event_date)",
                   "scale": {
                     "type": "temporal"
                   },
-                  "displayName": "event_date"
+                  "displayName": "Date"
                 },
                 "y": {
-                  "fieldName": "dau",
                   "scale": {
                     "type": "quantitative"
                   },
-                  "displayName": "dau"
+                  "fields": [
+                    {
+                      "fieldName": "dau",
+                      "displayName": "DAU"
+                    },
+                    {
+                      "fieldName": "trailing_7d",
+                      "displayName": "7-Day Active"
+                    },
+                    {
+                      "fieldName": "trailing_28d",
+                      "displayName": "28-Day Active"
+                    }
+                  ]
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Active Users Trend"
+                "title": "Active Users Over Time"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 11,
+            "y": 10,
             "width": 6,
             "height": 6
           }
@@ -1457,16 +1377,12 @@
                   "datasetName": "ds_monthly_trend",
                   "fields": [
                     {
-                      "name": "month",
-                      "expression": "`month`"
+                      "name": "monthly(month)",
+                      "expression": "DATE_TRUNC(\"MONTH\", `month`)"
                     },
                     {
                       "name": "compute_hours",
                       "expression": "`compute_hours`"
-                    },
-                    {
-                      "name": "source_type",
-                      "expression": "`source_type`"
                     }
                   ],
                   "disaggregated": true
@@ -1475,46 +1391,39 @@
             ],
             "spec": {
               "version": 3,
-              "widgetType": "line",
+              "widgetType": "bar",
               "encodings": {
                 "x": {
-                  "fieldName": "month",
+                  "fieldName": "monthly(month)",
                   "scale": {
                     "type": "temporal"
                   },
-                  "displayName": "month"
+                  "displayName": "Month"
                 },
                 "y": {
                   "fieldName": "compute_hours",
                   "scale": {
                     "type": "quantitative"
                   },
-                  "displayName": "compute_hours"
-                },
-                "color": {
-                  "fieldName": "source_type",
-                  "scale": {
-                    "type": "categorical"
-                  },
-                  "displayName": "source_type"
+                  "displayName": "Compute Hours"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Monthly Cost Trend"
+                "title": "Monthly Genie Compute Cost"
               }
             }
           },
           "position": {
             "x": 6,
-            "y": 11,
+            "y": 10,
             "width": 6,
             "height": 6
           }
         },
         {
           "widget": {
-            "name": "exec-breakdown-hdr",
+            "name": "exec-section-breakdown",
             "multilineTextboxSpec": {
               "lines": [
                 "### Breakdown"
@@ -1523,7 +1432,7 @@
           },
           "position": {
             "x": 0,
-            "y": 17,
+            "y": 16,
             "width": 12,
             "height": 1
           }
@@ -1538,12 +1447,12 @@
                   "datasetName": "ds_space_health",
                   "fields": [
                     {
-                      "name": "space_count",
-                      "expression": "`space_count`"
-                    },
-                    {
                       "name": "space_status",
                       "expression": "`space_status`"
+                    },
+                    {
+                      "name": "space_count",
+                      "expression": "`space_count`"
                     }
                   ],
                   "disaggregated": true
@@ -1559,17 +1468,14 @@
                   "scale": {
                     "type": "quantitative"
                   },
-                  "displayName": "space_count"
+                  "displayName": "Spaces"
                 },
                 "color": {
                   "fieldName": "space_status",
                   "scale": {
                     "type": "categorical"
                   },
-                  "displayName": "space_status"
-                },
-                "label": {
-                  "show": true
+                  "displayName": "Status"
                 }
               },
               "frame": {
@@ -1580,7 +1486,7 @@
           },
           "position": {
             "x": 0,
-            "y": 18,
+            "y": 17,
             "width": 4,
             "height": 5
           }
@@ -1595,12 +1501,12 @@
                   "datasetName": "ds_feedback",
                   "fields": [
                     {
-                      "name": "feedback_count",
-                      "expression": "`feedback_count`"
-                    },
-                    {
                       "name": "feedback_type",
                       "expression": "`feedback_type`"
+                    },
+                    {
+                      "name": "feedback_count",
+                      "expression": "`feedback_count`"
                     }
                   ],
                   "disaggregated": true
@@ -1616,35 +1522,32 @@
                   "scale": {
                     "type": "quantitative"
                   },
-                  "displayName": "feedback_count"
+                  "displayName": "Count"
                 },
                 "color": {
                   "fieldName": "feedback_type",
                   "scale": {
                     "type": "categorical"
                   },
-                  "displayName": "feedback_type"
-                },
-                "label": {
-                  "show": true
+                  "displayName": "Type"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Satisfaction"
+                "title": "Satisfaction Breakdown"
               }
             }
           },
           "position": {
             "x": 4,
-            "y": 18,
+            "y": 17,
             "width": 4,
             "height": 5
           }
         },
         {
           "widget": {
-            "name": "exec-top-ws-bar",
+            "name": "exec-top-ws",
             "queries": [
               {
                 "name": "main_query",
@@ -1673,14 +1576,14 @@
                   "scale": {
                     "type": "categorical"
                   },
-                  "displayName": "workspace_name"
+                  "displayName": "Workspace"
                 },
                 "y": {
                   "fieldName": "questions_asked",
                   "scale": {
                     "type": "quantitative"
                   },
-                  "displayName": "questions_asked"
+                  "displayName": "Questions"
                 }
               },
               "frame": {
@@ -1691,7 +1594,7 @@
           },
           "position": {
             "x": 8,
-            "y": 18,
+            "y": 17,
             "width": 4,
             "height": 5
           }
@@ -1781,7 +1684,7 @@
                   },
                   {
                     "fieldName": "p50_latency_sec",
-                    "displayName": "P50 Latency (s)"
+                    "displayName": "P50 (s)"
                   },
                   {
                     "fieldName": "query_fail_rate",
@@ -1797,7 +1700,7 @@
           },
           "position": {
             "x": 0,
-            "y": 23,
+            "y": 22,
             "width": 12,
             "height": 6
           }
@@ -1810,7 +1713,7 @@
       "layout": [
         {
           "widget": {
-            "name": "ws-overview-title",
+            "name": "ws-title",
             "multilineTextboxSpec": {
               "lines": [
                 "## Workspaces"
@@ -1873,10 +1776,10 @@
         },
         {
           "widget": {
-            "name": "ws-adoption-hdr",
+            "name": "ws-section-adopt",
             "multilineTextboxSpec": {
               "lines": [
-                "### Adoption"
+                "### Adoption & Engagement"
               ]
             }
           },
@@ -1889,10 +1792,10 @@
         },
         {
           "widget": {
-            "name": "ws-cost-hdr",
+            "name": "ws-section-cost",
             "multilineTextboxSpec": {
               "lines": [
-                "### Cost"
+                "### Cost & Operations"
               ]
             }
           },
@@ -2047,21 +1950,12 @@
               "encodings": {
                 "value": {
                   "fieldName": "sum(genie_cost_usd)",
-                  "displayName": "Genie Cost",
-                  "format": {
-                    "type": "number-currency",
-                    "currencyCode": "USD",
-                    "abbreviation": "compact",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 2
-                    }
-                  }
+                  "displayName": "Genie Cost ($)"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Genie Cost"
+                "title": "Genie Cost ($)"
               }
             }
           },
@@ -2082,8 +1976,8 @@
                   "datasetName": "ds_ws_consolidated",
                   "fields": [
                     {
-                      "name": "avg(cost_per_space)",
-                      "expression": "AVG(`cost_per_space`)"
+                      "name": "sum(cost_per_space)",
+                      "expression": "SUM(`cost_per_space`)"
                     }
                   ],
                   "disaggregated": false
@@ -2095,22 +1989,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "avg(cost_per_space)",
-                  "displayName": "Cost/Space",
-                  "format": {
-                    "type": "number-currency",
-                    "currencyCode": "USD",
-                    "abbreviation": "compact",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 2
-                    }
-                  }
+                  "fieldName": "sum(cost_per_space)",
+                  "displayName": "Avg Cost / Space"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Cost/Space"
+                "title": "Avg Cost / Space"
               }
             }
           },
@@ -2131,8 +2016,8 @@
                   "datasetName": "ds_ws_consolidated",
                   "fields": [
                     {
-                      "name": "avg(cost_per_query)",
-                      "expression": "AVG(`cost_per_query`)"
+                      "name": "sum(cost_per_query)",
+                      "expression": "SUM(`cost_per_query`)"
                     }
                   ],
                   "disaggregated": false
@@ -2144,22 +2029,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "avg(cost_per_query)",
-                  "displayName": "Cost/Query",
-                  "format": {
-                    "type": "number-currency",
-                    "currencyCode": "USD",
-                    "abbreviation": "compact",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 4
-                    }
-                  }
+                  "fieldName": "sum(cost_per_query)",
+                  "displayName": "Avg Cost / Query"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Cost/Query"
+                "title": "Avg Cost / Query"
               }
             }
           },
@@ -2172,38 +2048,6 @@
         },
         {
           "widget": {
-            "name": "ws-engage-hdr",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Engagement"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 6,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "ws-perf-hdr",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Performance"
-              ]
-            }
-          },
-          "position": {
-            "x": 6,
-            "y": 6,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
             "name": "ws-kpi-satisfaction",
             "queries": [
               {
@@ -2212,8 +2056,8 @@
                   "datasetName": "ds_ws_consolidated",
                   "fields": [
                     {
-                      "name": "avg(satisfaction_rate)",
-                      "expression": "AVG(`satisfaction_rate`)"
+                      "name": "sum(satisfaction_rate)",
+                      "expression": "SUM(`satisfaction_rate`)"
                     }
                   ],
                   "disaggregated": false
@@ -2225,15 +2069,8 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "avg(satisfaction_rate)",
-                  "displayName": "Satisfaction",
-                  "format": {
-                    "type": "number-percent",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 0
-                    }
-                  }
+                  "fieldName": "sum(satisfaction_rate)",
+                  "displayName": "Satisfaction"
                 }
               },
               "frame": {
@@ -2244,7 +2081,7 @@
           },
           "position": {
             "x": 0,
-            "y": 7,
+            "y": 6,
             "width": 2,
             "height": 3
           }
@@ -2259,8 +2096,8 @@
                   "datasetName": "ds_ws_consolidated",
                   "fields": [
                     {
-                      "name": "avg(cost_per_user)",
-                      "expression": "AVG(`cost_per_user`)"
+                      "name": "sum(cost_per_user)",
+                      "expression": "SUM(`cost_per_user`)"
                     }
                   ],
                   "disaggregated": false
@@ -2272,28 +2109,19 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "avg(cost_per_user)",
-                  "displayName": "Cost/User",
-                  "format": {
-                    "type": "number-currency",
-                    "currencyCode": "USD",
-                    "abbreviation": "compact",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 2
-                    }
-                  }
+                  "fieldName": "sum(cost_per_user)",
+                  "displayName": "Avg Cost / User"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Cost/User"
+                "title": "Avg Cost / User"
               }
             }
           },
           "position": {
             "x": 2,
-            "y": 7,
+            "y": 6,
             "width": 2,
             "height": 3
           }
@@ -2322,14 +2150,7 @@
               "encodings": {
                 "value": {
                   "fieldName": "sum(compute_hours)",
-                  "displayName": "Compute Hours",
-                  "format": {
-                    "type": "number-plain",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 1
-                    }
-                  }
+                  "displayName": "Compute Hours"
                 }
               },
               "frame": {
@@ -2340,14 +2161,14 @@
           },
           "position": {
             "x": 4,
-            "y": 7,
+            "y": 6,
             "width": 2,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "ws-kpi-p50",
+            "name": "ws-kpi-latency",
             "queries": [
               {
                 "name": "main_query",
@@ -2355,8 +2176,8 @@
                   "datasetName": "ds_ws_consolidated",
                   "fields": [
                     {
-                      "name": "avg(p50_latency_sec)",
-                      "expression": "AVG(`p50_latency_sec`)"
+                      "name": "sum(p50_latency_sec)",
+                      "expression": "SUM(`p50_latency_sec`)"
                     }
                   ],
                   "disaggregated": false
@@ -2368,26 +2189,19 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "avg(p50_latency_sec)",
-                  "displayName": "P50 Latency",
-                  "format": {
-                    "type": "number-plain",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 1
-                    }
-                  }
+                  "fieldName": "sum(p50_latency_sec)",
+                  "displayName": "P50 Latency (s)"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "P50 Latency"
+                "title": "P50 Latency (s)"
               }
             }
           },
           "position": {
             "x": 6,
-            "y": 7,
+            "y": 6,
             "width": 2,
             "height": 3
           }
@@ -2402,8 +2216,8 @@
                   "datasetName": "ds_ws_consolidated",
                   "fields": [
                     {
-                      "name": "avg(query_fail_rate)",
-                      "expression": "AVG(`query_fail_rate`)"
+                      "name": "sum(query_fail_rate)",
+                      "expression": "SUM(`query_fail_rate`)"
                     }
                   ],
                   "disaggregated": false
@@ -2415,26 +2229,19 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "avg(query_fail_rate)",
-                  "displayName": "Fail Rate",
-                  "format": {
-                    "type": "number-plain",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 3
-                    }
-                  }
+                  "fieldName": "sum(query_fail_rate)",
+                  "displayName": "Query Fail Rate"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Fail Rate"
+                "title": "Query Fail Rate"
               }
             }
           },
           "position": {
             "x": 8,
-            "y": 7,
+            "y": 6,
             "width": 2,
             "height": 3
           }
@@ -2463,14 +2270,7 @@
               "encodings": {
                 "value": {
                   "fieldName": "sum(gb_scanned)",
-                  "displayName": "GB Scanned",
-                  "format": {
-                    "type": "number-plain",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 1
-                    }
-                  }
+                  "displayName": "GB Scanned"
                 }
               },
               "frame": {
@@ -2481,14 +2281,14 @@
           },
           "position": {
             "x": 10,
-            "y": 7,
+            "y": 6,
             "width": 2,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "ws-activity-hdr",
+            "name": "ws-section-activity",
             "multilineTextboxSpec": {
               "lines": [
                 "### Activity"
@@ -2497,7 +2297,7 @@
           },
           "position": {
             "x": 0,
-            "y": 10,
+            "y": 9,
             "width": 12,
             "height": 1
           }
@@ -2512,16 +2312,16 @@
                   "datasetName": "ds_ws_daily_activity",
                   "fields": [
                     {
-                      "name": "event_date",
-                      "expression": "`event_date`"
+                      "name": "daily(event_date)",
+                      "expression": "DATE_TRUNC(\"DAY\", `event_date`)"
                     },
                     {
                       "name": "messages",
                       "expression": "`messages`"
                     },
                     {
-                      "name": "workspace_name",
-                      "expression": "`workspace_name`"
+                      "name": "users",
+                      "expression": "`users`"
                     }
                   ],
                   "disaggregated": true
@@ -2533,25 +2333,26 @@
               "widgetType": "line",
               "encodings": {
                 "x": {
-                  "fieldName": "event_date",
+                  "fieldName": "daily(event_date)",
                   "scale": {
                     "type": "temporal"
                   },
-                  "displayName": "event_date"
+                  "displayName": "Date"
                 },
                 "y": {
-                  "fieldName": "messages",
                   "scale": {
                     "type": "quantitative"
                   },
-                  "displayName": "messages"
-                },
-                "color": {
-                  "fieldName": "workspace_name",
-                  "scale": {
-                    "type": "categorical"
-                  },
-                  "displayName": "workspace_name"
+                  "fields": [
+                    {
+                      "fieldName": "messages",
+                      "displayName": "Questions"
+                    },
+                    {
+                      "fieldName": "users",
+                      "displayName": "Users"
+                    }
+                  ]
                 }
               },
               "frame": {
@@ -2562,68 +2363,14 @@
           },
           "position": {
             "x": 0,
-            "y": 11,
-            "width": 6,
+            "y": 10,
+            "width": 12,
             "height": 5
           }
         },
         {
           "widget": {
-            "name": "ws-daily-cost",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_daily_trends",
-                  "fields": [
-                    {
-                      "name": "event_date",
-                      "expression": "`event_date`"
-                    },
-                    {
-                      "name": "daily_genie_cost",
-                      "expression": "`daily_genie_cost`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 3,
-              "widgetType": "line",
-              "encodings": {
-                "x": {
-                  "fieldName": "event_date",
-                  "scale": {
-                    "type": "temporal"
-                  },
-                  "displayName": "event_date"
-                },
-                "y": {
-                  "fieldName": "daily_genie_cost",
-                  "scale": {
-                    "type": "quantitative"
-                  },
-                  "displayName": "daily_genie_cost"
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Daily Cost"
-              }
-            }
-          },
-          "position": {
-            "x": 6,
-            "y": 11,
-            "width": 6,
-            "height": 5
-          }
-        },
-        {
-          "widget": {
-            "name": "ws-users-hdr",
+            "name": "ws-section-detail",
             "multilineTextboxSpec": {
               "lines": [
                 "### Users & Spaces"
@@ -2632,14 +2379,14 @@
           },
           "position": {
             "x": 0,
-            "y": 16,
+            "y": 15,
             "width": 12,
             "height": 1
           }
         },
         {
           "widget": {
-            "name": "ws-top-users-tbl",
+            "name": "ws-top-users-table",
             "queries": [
               {
                 "name": "main_query",
@@ -2722,14 +2469,14 @@
           },
           "position": {
             "x": 0,
-            "y": 17,
+            "y": 16,
             "width": 12,
             "height": 6
           }
         },
         {
           "widget": {
-            "name": "ws-space-inventory",
+            "name": "ws-space-table",
             "queries": [
               {
                 "name": "main_query",
@@ -2800,7 +2547,7 @@
                   },
                   {
                     "fieldName": "queries_30d",
-                    "displayName": "Queries 30d"
+                    "displayName": "Queries (30d)"
                   },
                   {
                     "fieldName": "compute_hours",
@@ -2808,19 +2555,19 @@
                   },
                   {
                     "fieldName": "p50_latency_sec",
-                    "displayName": "P50 Latency (s)"
+                    "displayName": "P50 (s)"
                   }
                 ]
               },
               "frame": {
                 "showTitle": true,
-                "title": "Space Inventory"
+                "title": "Genie Spaces"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 23,
+            "y": 22,
             "width": 12,
             "height": 6
           }
@@ -2852,7 +2599,7 @@
             "name": "sp-ws-filter",
             "queries": [
               {
-                "name": "sp-ws-filter_q",
+                "name": "ws-overview-filter_q",
                 "query": {
                   "datasetName": "ds_workspace_detail",
                   "fields": [
@@ -2876,7 +2623,7 @@
                 "fields": [
                   {
                     "fieldName": "workspace_name",
-                    "queryName": "sp-ws-filter_q"
+                    "queryName": "ws-overview-filter_q"
                   }
                 ]
               },
@@ -2906,10 +2653,6 @@
                     {
                       "name": "space_name",
                       "expression": "`space_name`"
-                    },
-                    {
-                      "name": "space_name_associativity",
-                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
                     }
                   ],
                   "disaggregated": false
@@ -2923,6 +2666,7 @@
                 "fields": [
                   {
                     "fieldName": "space_name",
+                    "displayName": "Space",
                     "queryName": "sp_filter_q"
                   }
                 ]
@@ -2942,10 +2686,10 @@
         },
         {
           "widget": {
-            "name": "sp-adoption-hdr",
+            "name": "sp-section-adopt",
             "multilineTextboxSpec": {
               "lines": [
-                "### Adoption"
+                "### Adoption & Engagement"
               ]
             }
           },
@@ -2958,10 +2702,10 @@
         },
         {
           "widget": {
-            "name": "sp-cost-hdr",
+            "name": "sp-section-cost",
             "multilineTextboxSpec": {
               "lines": [
-                "### Cost"
+                "### Cost & Operations"
               ]
             }
           },
@@ -2982,8 +2726,8 @@
                   "datasetName": "ds_space_consolidated",
                   "fields": [
                     {
-                      "name": "count(space_name)",
-                      "expression": "COUNT(`space_name`)"
+                      "name": "sum(total_questions)",
+                      "expression": "SUM(`total_questions`)"
                     }
                   ],
                   "disaggregated": false
@@ -2995,13 +2739,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "count(space_name)",
-                  "displayName": "Spaces"
+                  "fieldName": "sum(total_questions)",
+                  "displayName": "Total Questions"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Spaces"
+                "title": "Total Questions"
               }
             }
           },
@@ -3054,7 +2798,7 @@
         },
         {
           "widget": {
-            "name": "sp-kpi-questions",
+            "name": "sp-kpi-satisfaction",
             "queries": [
               {
                 "name": "main_query",
@@ -3062,8 +2806,8 @@
                   "datasetName": "ds_space_consolidated",
                   "fields": [
                     {
-                      "name": "sum(total_questions)",
-                      "expression": "SUM(`total_questions`)"
+                      "name": "sum(satisfaction_rate)",
+                      "expression": "SUM(`satisfaction_rate`)"
                     }
                   ],
                   "disaggregated": false
@@ -3075,13 +2819,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "sum(total_questions)",
-                  "displayName": "Questions"
+                  "fieldName": "sum(satisfaction_rate)",
+                  "displayName": "Satisfaction"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Questions"
+                "title": "Satisfaction"
               }
             }
           },
@@ -3116,12 +2860,12 @@
               "encodings": {
                 "value": {
                   "fieldName": "sum(queries_30d)",
-                  "displayName": "Queries 30d"
+                  "displayName": "Queries (30d)"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Queries 30d"
+                "title": "Queries (30d)"
               }
             }
           },
@@ -3156,19 +2900,12 @@
               "encodings": {
                 "value": {
                   "fieldName": "sum(compute_hours)",
-                  "displayName": "Compute Hrs",
-                  "format": {
-                    "type": "number-plain",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 1
-                    }
-                  }
+                  "displayName": "Compute Hours"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Compute Hrs"
+                "title": "Compute Hours"
               }
             }
           },
@@ -3203,14 +2940,7 @@
               "encodings": {
                 "value": {
                   "fieldName": "sum(gb_scanned)",
-                  "displayName": "GB Scanned",
-                  "format": {
-                    "type": "number-plain",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 1
-                    }
-                  }
+                  "displayName": "GB Scanned"
                 }
               },
               "frame": {
@@ -3228,39 +2958,7 @@
         },
         {
           "widget": {
-            "name": "sp-quality-hdr",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Quality"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 8,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "sp-perf-hdr",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Performance"
-              ]
-            }
-          },
-          "position": {
-            "x": 6,
-            "y": 8,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "sp-kpi-satisfaction",
+            "name": "sp-kpi-days",
             "queries": [
               {
                 "name": "main_query",
@@ -3268,8 +2966,8 @@
                   "datasetName": "ds_space_consolidated",
                   "fields": [
                     {
-                      "name": "avg(satisfaction_rate)",
-                      "expression": "AVG(`satisfaction_rate`)"
+                      "name": "sum(days_active)",
+                      "expression": "SUM(`days_active`)"
                     }
                   ],
                   "disaggregated": false
@@ -3281,26 +2979,59 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "avg(satisfaction_rate)",
-                  "displayName": "Satisfaction",
-                  "format": {
-                    "type": "number-percent",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 0
-                    }
-                  }
+                  "fieldName": "sum(days_active)",
+                  "displayName": "Days Active"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Satisfaction"
+                "title": "Days Active"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 9,
+            "y": 8,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "sp-kpi-latency",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_space_consolidated",
+                  "fields": [
+                    {
+                      "name": "sum(p50_latency_sec)",
+                      "expression": "SUM(`p50_latency_sec`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(p50_latency_sec)",
+                  "displayName": "P50 Latency (s)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "P50 Latency (s)"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 8,
             "width": 2,
             "height": 3
           }
@@ -3315,8 +3046,8 @@
                   "datasetName": "ds_space_consolidated",
                   "fields": [
                     {
-                      "name": "avg(query_fail_rate)",
-                      "expression": "AVG(`query_fail_rate`)"
+                      "name": "sum(query_fail_rate)",
+                      "expression": "SUM(`query_fail_rate`)"
                     }
                   ],
                   "disaggregated": false
@@ -3328,290 +3059,21 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "avg(query_fail_rate)",
-                  "displayName": "Fail Rate",
-                  "format": {
-                    "type": "number-plain",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 3
-                    }
-                  }
+                  "fieldName": "sum(query_fail_rate)",
+                  "displayName": "Query Fail Rate"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Fail Rate"
-              }
-            }
-          },
-          "position": {
-            "x": 2,
-            "y": 9,
-            "width": 2,
-            "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "sp-kpi-p50",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_space_consolidated",
-                  "fields": [
-                    {
-                      "name": "avg(p50_latency_sec)",
-                      "expression": "AVG(`p50_latency_sec`)"
-                    }
-                  ],
-                  "disaggregated": false
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": {
-                  "fieldName": "avg(p50_latency_sec)",
-                  "displayName": "P50 Latency",
-                  "format": {
-                    "type": "number-plain",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 1
-                    }
-                  }
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "P50 Latency"
+                "title": "Query Fail Rate"
               }
             }
           },
           "position": {
             "x": 4,
-            "y": 9,
+            "y": 8,
             "width": 2,
             "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "sp-kpi-days",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_space_consolidated",
-                  "fields": [
-                    {
-                      "name": "avg(days_active)",
-                      "expression": "AVG(`days_active`)"
-                    }
-                  ],
-                  "disaggregated": false
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": {
-                  "fieldName": "avg(days_active)",
-                  "displayName": "Days Active",
-                  "format": {
-                    "type": "number-plain",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 1
-                    }
-                  }
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Days Active"
-              }
-            }
-          },
-          "position": {
-            "x": 6,
-            "y": 9,
-            "width": 2,
-            "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "sp-kpi-cost-placeholder",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_space_consolidated",
-                  "fields": [
-                    {
-                      "name": "sum(compute_hours)2",
-                      "expression": "SUM(`compute_hours`)"
-                    }
-                  ],
-                  "disaggregated": false
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": {
-                  "fieldName": "sum(compute_hours)2",
-                  "displayName": "Total Compute",
-                  "format": {
-                    "type": "number-plain",
-                    "decimalPlaces": {
-                      "type": "max",
-                      "places": 1
-                    }
-                  }
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Total Compute"
-              }
-            }
-          },
-          "position": {
-            "x": 8,
-            "y": 9,
-            "width": 2,
-            "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "sp-kpi-status-count",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_space_consolidated",
-                  "fields": [
-                    {
-                      "name": "count(status)",
-                      "expression": "COUNT(`status`)"
-                    }
-                  ],
-                  "disaggregated": false
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": {
-                  "fieldName": "count(status)",
-                  "displayName": "Status Count"
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Status Count"
-              }
-            }
-          },
-          "position": {
-            "x": 10,
-            "y": 9,
-            "width": 2,
-            "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "sp-activity-hdr",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Activity"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 12,
-            "width": 12,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "sp-daily-activity",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_space_drilldown",
-                  "fields": [
-                    {
-                      "name": "event_date",
-                      "expression": "`event_date`"
-                    },
-                    {
-                      "name": "questions",
-                      "expression": "`questions`"
-                    },
-                    {
-                      "name": "space_name",
-                      "expression": "`space_name`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 3,
-              "widgetType": "line",
-              "encodings": {
-                "x": {
-                  "fieldName": "event_date",
-                  "scale": {
-                    "type": "temporal"
-                  },
-                  "displayName": "event_date"
-                },
-                "y": {
-                  "fieldName": "questions",
-                  "scale": {
-                    "type": "quantitative"
-                  },
-                  "displayName": "questions"
-                },
-                "color": {
-                  "fieldName": "space_name",
-                  "scale": {
-                    "type": "categorical"
-                  },
-                  "displayName": "space_name"
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Daily Activity"
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 13,
-            "width": 6,
-            "height": 5
           }
         },
         {
@@ -3624,12 +3086,12 @@
                   "datasetName": "ds_space_health",
                   "fields": [
                     {
-                      "name": "space_count",
-                      "expression": "`space_count`"
-                    },
-                    {
                       "name": "space_status",
                       "expression": "`space_status`"
+                    },
+                    {
+                      "name": "space_count",
+                      "expression": "`space_count`"
                     }
                   ],
                   "disaggregated": true
@@ -3645,17 +3107,14 @@
                   "scale": {
                     "type": "quantitative"
                   },
-                  "displayName": "space_count"
+                  "displayName": "Spaces"
                 },
                 "color": {
                   "fieldName": "space_status",
                   "scale": {
                     "type": "categorical"
                   },
-                  "displayName": "space_status"
-                },
-                "label": {
-                  "show": true
+                  "displayName": "Status"
                 }
               },
               "frame": {
@@ -3666,71 +3125,96 @@
           },
           "position": {
             "x": 6,
-            "y": 13,
-            "width": 3,
-            "height": 5
+            "y": 8,
+            "width": 6,
+            "height": 3
           }
         },
         {
           "widget": {
-            "name": "sp-feedback-pie",
+            "name": "sp-section-activity",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Activity"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "sp-daily-activity",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_feedback",
+                  "datasetName": "ds_space_drilldown",
                   "fields": [
                     {
-                      "name": "feedback_count",
-                      "expression": "`feedback_count`"
+                      "name": "daily(event_date)",
+                      "expression": "DATE_TRUNC(\"DAY\", `event_date`)"
                     },
                     {
-                      "name": "feedback_type",
-                      "expression": "`feedback_type`"
+                      "name": "sum(questions)",
+                      "expression": "SUM(`questions`)"
+                    },
+                    {
+                      "name": "sum(users)",
+                      "expression": "SUM(`users`)"
                     }
                   ],
-                  "disaggregated": true
+                  "disaggregated": false
                 }
               }
             ],
             "spec": {
               "version": 3,
-              "widgetType": "pie",
+              "widgetType": "line",
               "encodings": {
-                "angle": {
-                  "fieldName": "feedback_count",
+                "x": {
+                  "fieldName": "daily(event_date)",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Date"
+                },
+                "y": {
                   "scale": {
                     "type": "quantitative"
                   },
-                  "displayName": "feedback_count"
-                },
-                "color": {
-                  "fieldName": "feedback_type",
-                  "scale": {
-                    "type": "categorical"
-                  },
-                  "displayName": "feedback_type"
-                },
-                "label": {
-                  "show": true
+                  "fields": [
+                    {
+                      "fieldName": "sum(questions)",
+                      "displayName": "Questions"
+                    },
+                    {
+                      "fieldName": "sum(users)",
+                      "displayName": "Users"
+                    }
+                  ]
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Feedback"
+                "title": "Daily Activity"
               }
             }
           },
           "position": {
-            "x": 9,
-            "y": 13,
-            "width": 3,
+            "x": 0,
+            "y": 12,
+            "width": 12,
             "height": 5
           }
         },
         {
           "widget": {
-            "name": "sp-all-hdr",
+            "name": "sp-section-all",
             "multilineTextboxSpec": {
               "lines": [
                 "### All Spaces"
@@ -3739,7 +3223,7 @@
           },
           "position": {
             "x": 0,
-            "y": 18,
+            "y": 17,
             "width": 12,
             "height": 1
           }
@@ -3845,7 +3329,7 @@
                   },
                   {
                     "fieldName": "queries_30d",
-                    "displayName": "Queries 30d"
+                    "displayName": "Queries (30d)"
                   },
                   {
                     "fieldName": "compute_hours",
@@ -3857,7 +3341,7 @@
                   },
                   {
                     "fieldName": "p50_latency_sec",
-                    "displayName": "P50 Latency (s)"
+                    "displayName": "P50 (s)"
                   },
                   {
                     "fieldName": "query_fail_rate",
@@ -3865,11 +3349,11 @@
                   },
                   {
                     "fieldName": "first_activity",
-                    "displayName": "First Activity"
+                    "displayName": "First Active"
                   },
                   {
                     "fieldName": "last_activity",
-                    "displayName": "Last Activity"
+                    "displayName": "Last Active"
                   },
                   {
                     "fieldName": "days_active",
@@ -3879,13 +3363,13 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "All Spaces"
+                "title": "All Genie Spaces"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 19,
+            "y": 18,
             "width": 12,
             "height": 8
           }
@@ -6929,15 +6413,18 @@
             "name": "readme-kpi-body",
             "multilineTextboxSpec": {
               "lines": [
-                "**Total Genie Spaces** \u2014 The number of distinct Genie Spaces that have ever been accessed across all workspaces. This includes active, recently used, and inactive spaces. A space is counted the first time any user interacts with it.\n",
-                "\n",
-                "**Active This Week** \u2014 The number of Genie Spaces with at least one user interaction in the last 7 days. This tells you how many spaces are seeing regular, ongoing use.\n",
-                "\n",
-                "**Unique Users** \u2014 The total number of distinct individuals (by email) who have interacted with any Genie Space, ever. Each person is counted only once, even if they use multiple spaces across multiple workspaces.\n",
-                "\n",
-                "**Questions Asked** \u2014 The total number of messages users have sent to Genie Spaces. This counts every question or prompt submitted, including follow-ups within the same conversation.\n",
-                "\n",
-                "**User Satisfaction** \u2014 The percentage of thumbs-up ratings out of all ratings (thumbs-up + thumbs-down). This is a weighted average across all spaces \u2014 a space with 50 ratings contributes more than one with 2 ratings. Spaces with no ratings are excluded."
+                "**Total Spaces** \u2014 Distinct Genie Spaces with any question activity, ever.\n\n",
+                "**Active Spaces** \u2014 Spaces with at least one question in the last 30 days.\n\n",
+                "**Active Users** \u2014 Distinct users who asked at least one question.\n\n",
+                "**DAU** \u2014 Daily Active Users (yesterday).\n\n",
+                "**Repeat Rate (7d)** \u2014 Of all users who asked a question, what % came back to ask another within 7 days. Measures habit formation.\n\n",
+                "**Satisfaction** \u2014 Thumbs up / (thumbs up + thumbs down). Note: only ~4% of questions receive feedback.\n\n",
+                "**Genie Cost ($)** \u2014 Proportional SQL warehouse cost attributed to Genie queries (30d). Calculated as: warehouse_cost * (genie_query_time / total_query_time).\n\n",
+                "**Avg Cost / Space** \u2014 Total Genie cost divided by number of spaces.\n\n",
+                "**Avg Cost / Question** \u2014 Total Genie cost divided by number of questions asked.\n\n",
+                "**Avg Questions / User** \u2014 Total questions divided by total distinct users.\n\n",
+                "**Stale Spaces (30d+)** \u2014 Spaces with no question activity in over 30 days.\n\n",
+                "**Compute Hours** \u2014 Total SQL execution time for all Genie queries."
               ]
             }
           },
