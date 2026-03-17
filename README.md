@@ -4,72 +4,119 @@ An AI/BI Lakeview dashboard for monitoring Genie Space adoption, engagement, and
 
 ## Overview
 
-Genie Watchtower provides account-wide visibility into how Genie Spaces are being used, who's using them, and how well they're performing. Built entirely on system tables — no custom data pipelines required.
+Genie Watchtower provides account-wide visibility into how Genie Spaces are being used, who's using them, and how well they're performing. Built on system tables with an optional benchmark score collector notebook.
 
 ## Architecture
 
 **Data Sources:**
-- `system.access.audit` — User activity, space interactions, conversations, feedback
-- `system.query.history` — Query execution metrics, latency, cost attribution
-- `system.billing.usage` + `system.billing.list_prices` — Dollar cost attribution
-- `genie_monitoring.dashboard.*` — Pre-built SQL views for common aggregations
+- `system.access.audit` -- User activity, space interactions, conversations, feedback
+- `system.query.history` -- Query execution metrics, latency, cost attribution
+- `system.billing.usage` + `system.billing.list_prices` -- Dollar cost attribution via proportional method
+- `system.access.workspaces_latest` -- Workspace name resolution
+- `genie_monitoring.benchmark.*` -- Benchmark scores (populated by the collector notebook)
 
-**Dashboard Pages (11 tabs):**
+**Key Datasets:**
+- `ds_genie_questions` -- Event-level, one row per question. Supports COUNT, COUNT DISTINCT in widgets. Global date + workspace + space filters all bind to this.
+- `ds_genie_feedback` -- Event-level, one row per feedback. AVG(is_positive) = satisfaction rate.
+- `ds_genie_cost` -- Daily per workspace. Proportional cost: warehouse_cost * (genie_ms / total_ms).
+- `ds_genie_daily_ratios` -- Daily pre-computed ratios (cost/question, Q/user, cost/user). Widgets use AVG.
 
-| Page | Purpose |
-|------|---------|
-| **Executive Summary** | Account-wide KPIs, activity trends, cost overview |
-| **Workspace Overview** | Per-workspace drill-down with filters |
-| **All Spaces** | Space explorer with workspace + space filters |
-| **Growth & Trends** | Period-over-period comparisons, fastest growing workspaces |
-| **Cost Attribution** | SQL warehouse spend breakdown by workspace |
-| **Genie vs. Dashboards** | Workload comparison — Genie vs AI/BI Dashboards vs notebooks |
-| **Showback** | Per-user consumption for cost attribution |
-| **Engagement & Retention** | User engagement depth, conversation depth, stickiness, satisfaction trends |
-| **Health Metrics** | DAU/WAU/MAU, login-to-use, repeat rate, latency, fail rate, stale spaces |
-| **About This Dashboard** | Documentation page |
+**Dashboard Pages (10 tabs):**
 
-## Health Metrics KPIs
+| Page | Audience | Filters | Purpose |
+|------|----------|---------|---------|
+| **Executive Summary** | VP | Date range | 12 KPIs, trends, breakdowns -- 1000ft view |
+| **Workspace Overview** | Director | Date + Workspace | Same KPIs scoped to workspace, top users, space inventory |
+| **All Spaces** | Manager | Date + Workspace + Space | Deepest dive, full space table with all metrics |
+| **Growth & Trends** | Analyst | Date + Period | Period-over-period comparisons |
+| **Cost Attribution** | Finance | -- | SQL warehouse spend by workspace |
+| **Showback** | Finance | -- | Per-user consumption |
+| **Engagement & Retention** | Analyst | -- | Conversation depth, stickiness, satisfaction trends |
+| **Health Metrics** | Ops | -- | DAU/WAU/MAU, repeat rate, latency trends |
+| **About This Dashboard** | Everyone | -- | KPI definitions and methodology |
 
-| KPI | Source | Description |
+## KPIs (Executive Summary)
+
+All KPIs respect the global date range filter.
+
+| KPI | Source | Calculation |
 |-----|--------|-------------|
-| DAU / 7d / 28d Active Users | `system.access.audit` | Distinct users who asked Genie questions |
-| Login-to-Use Rate | `system.access.audit` | % of users who viewed a space and actually asked a question |
-| 7-Day Repeat Rate | `system.access.audit` | % of users who return within 7 days |
-| Query Fail Rate | `system.query.history` | Proxy for unanswered rate (failed SQL executions) |
-| P50 Response Latency | `system.query.history` | Median SQL execution time (not full LLM response time) |
-| Query Cost | `system.query.history` | Total compute hours for Genie queries |
-| Total Spaces | `system.access.audit` | Distinct spaces with any question activity |
-| Stale Spaces | `system.access.audit` | Spaces with no activity in 30+ days |
+| Total Spaces | `ds_genie_questions` | COUNT(DISTINCT space_id) |
+| Active Users | `ds_genie_questions` | COUNT(DISTINCT email) |
+| Questions Asked | `ds_genie_questions` | COUNT(*) |
+| Genie Cost ($) | `ds_genie_cost` | SUM(genie_cost_usd) -- proportional billing attribution |
+| Compute Hours | `ds_genie_cost` | SUM(compute_hours) |
+| Avg Cost / Space | `ds_genie_daily_ratios` | AVG(daily cost / daily spaces) |
+| Satisfaction | `ds_genie_feedback` | AVG(is_positive) where 1=thumbs up, 0=thumbs down |
+| Stale Spaces | `ds_stale_spaces` | Spaces with no activity 30+ days (always relative to today) |
+| Active Days | `ds_genie_questions` | COUNT(DISTINCT event_date) |
+| Avg Q / User / Day | `ds_genie_daily_ratios` | AVG(daily questions / daily users) |
+| Avg Cost / Question | `ds_genie_daily_ratios` | AVG(daily cost / daily questions) |
+| Avg Cost / User / Day | `ds_genie_daily_ratios` | AVG(daily cost / daily users) |
+
+## Benchmark Score Collection
+
+The `notebooks/collect_benchmark_scores.py` notebook uses the Databricks SDK to pull Genie Space benchmark evaluation results into Delta tables.
+
+**How it works:**
+1. Lists all Genie Spaces via `w.genie.list_spaces()`
+2. For each space, calls `w.genie.genie_list_eval_runs()` to get benchmark runs
+3. For completed runs, calls `w.genie.genie_list_eval_results()` for per-question results
+4. Writes to `genie_monitoring.benchmark.genie_eval_runs` and `genie_monitoring.benchmark.genie_eval_results`
+
+**Prerequisites:**
+- Benchmark questions must be configured in the Genie Space UI first
+- Benchmarks must be run via the UI (the notebook collects results, doesn't trigger runs)
+- `databricks-sdk` installed on the cluster
+
+**Schedule:** Run as a daily/weekly job after benchmarks are executed.
 
 ## Deployment
 
-**Workspace:** Deployed to `adb-2338896885246877.17.azuredatabricks.net`
-
+**Workspace:** `adb-2338896885246877.17.azuredatabricks.net`
 **Dashboard ID:** `01f11caf09151fedb1919ea8408dffea`
-
 **Warehouse:** `e69629978b5a7e40` (Shared Endpoint)
+**CLI Profile:** `intermountain-genie`
 
-### Deploy from JSON
+### Deploy Dashboard
 
 ```bash
-# Update dashboard
-databricks api patch /api/2.0/lakeview/dashboards/01f11caf09151fedb1919ea8408dffea \
-  --json @dashboard-payload.json \
-  --profile intermountain-genie
+# Create payload
+python3 -c "
+import json
+with open('dashboard.json') as f: sd = json.load(f)
+payload = {'display_name': 'Genie Watchtower', 'warehouse_id': 'e69629978b5a7e40', 'serialized_dashboard': json.dumps(sd)}
+with open('/tmp/payload.json', 'w') as f: json.dump(payload, f)
+"
 
-# Publish
+# Update + publish
+databricks api patch /api/2.0/lakeview/dashboards/01f11caf09151fedb1919ea8408dffea \
+  --json @/tmp/payload.json --profile intermountain-genie
+
 databricks api post /api/2.0/lakeview/dashboards/01f11caf09151fedb1919ea8408dffea/published \
   --json '{"embed_credentials": true, "warehouse_id": "e69629978b5a7e40"}' \
   --profile intermountain-genie
 ```
 
-## Prerequisites
+### Import Benchmark Notebook
 
-- Databricks CLI authenticated with `intermountain-genie` profile
-- Access to `system.access.audit`, `system.query.history`, `system.billing.usage`
-- SQL warehouse with access to system tables
+Upload `notebooks/collect_benchmark_scores.py` to the workspace and run with parameters:
+- `catalog`: target catalog (default: `genie_monitoring`)
+- `schema`: target schema (default: `benchmark`)
 
 ## Files
 
-- `dashboard.json` — Serialized Lakeview dashboard definition (datasets + pages + widgets)
+```
+genie-watchtower/
+  dashboard.json                          # Lakeview dashboard definition
+  notebooks/
+    collect_benchmark_scores.py           # Benchmark score collector (Databricks notebook)
+  README.md
+```
+
+## Prerequisites
+
+- Databricks CLI authenticated with `intermountain-genie` profile
+- Access to system tables: `system.access.audit`, `system.query.history`, `system.billing.usage`, `system.billing.list_prices`
+- SQL warehouse with system table access
+- For benchmarks: `databricks-sdk` on cluster, benchmark questions configured in Genie UI
