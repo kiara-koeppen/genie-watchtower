@@ -509,7 +509,7 @@
         "  ROUND((SELECT cost_usd FROM genie_cost) / NULLIF((SELECT total_questions FROM questions), 0), 4) AS avg_cost_per_question, ",
         "  ROUND((SELECT total_questions FROM questions) * 1.0 / NULLIF((SELECT total_askers FROM questions), 0), 1) AS avg_questions_per_user, ",
         "  (SELECT COUNT(*) FROM space_health WHERE DATEDIFF(current_date(), last_dt) > 30) AS stale_spaces, ",
-        "  (SELECT compute_hours FROM genie_queries) AS compute_hours ",
+        "  (SELECT compute_hours FROM genie_queries) AS compute_hours, ROUND((SELECT cost_usd FROM genie_cost) / NULLIF(COUNT(DISTINCT a.email), 0), 2) AS avg_cost_per_user ",
         "FROM activity a "
       ]
     },
@@ -866,7 +866,7 @@
         },
         {
           "widget": {
-            "name": "exec-kpi-active-spaces",
+            "name": "exec-kpi-stale-spaces",
             "queries": [
               {
                 "name": "main_query",
@@ -874,8 +874,8 @@
                   "datasetName": "ds_exec_consolidated",
                   "fields": [
                     {
-                      "name": "active_spaces",
-                      "expression": "`active_spaces`"
+                      "name": "stale_spaces",
+                      "expression": "`stale_spaces`"
                     }
                   ],
                   "disaggregated": true
@@ -887,13 +887,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "active_spaces",
-                  "displayName": "Active Spaces"
+                  "fieldName": "stale_spaces",
+                  "displayName": "Stale Spaces"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Active Spaces"
+                "title": "Stale Spaces (30d+)"
               }
             }
           },
@@ -1226,7 +1226,7 @@
         },
         {
           "widget": {
-            "name": "exec-kpi-stale",
+            "name": "exec-kpi-cost-user",
             "queries": [
               {
                 "name": "main_query",
@@ -1234,8 +1234,8 @@
                   "datasetName": "ds_exec_consolidated",
                   "fields": [
                     {
-                      "name": "stale_spaces",
-                      "expression": "`stale_spaces`"
+                      "name": "avg_cost_per_user",
+                      "expression": "`avg_cost_per_user`"
                     }
                   ],
                   "disaggregated": true
@@ -1247,13 +1247,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "stale_spaces",
-                  "displayName": "Stale Spaces (30d+)"
+                  "fieldName": "avg_cost_per_user",
+                  "displayName": "Avg Cost/User"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Stale Spaces (30d+)"
+                "title": "Avg Cost / User"
               }
             }
           },
