@@ -449,9 +449,9 @@
         "    AND request_params['space_id'] IS NOT NULL ",
         "  GROUP BY request_params['space_id'] ",
         ") ",
-        "SELECT CASE WHEN DATEDIFF(current_date(), last_activity) <= 7 THEN 'Active (7d)' ",
-        "  WHEN DATEDIFF(current_date(), last_activity) <= 30 THEN 'Recent (30d)' ",
-        "  ELSE 'Stale (30d+)' END AS space_status, COUNT(*) AS space_count ",
+        "SELECT CASE WHEN DATEDIFF(current_date(), last_activity) <= 7 THEN 'Active (last 7 days)' ",
+        "  WHEN DATEDIFF(current_date(), last_activity) <= 30 THEN 'Cooling Off (8-30 days)' ",
+        "  ELSE 'Stale (30+ days)' END AS space_status, COUNT(*) AS space_count ",
         "FROM space_last GROUP BY 1 "
       ]
     },
@@ -623,7 +623,7 @@
         "SELECT sa.workspace_name, sa.space_name, sa.unique_users, sa.total_questions, ",
         "  ROUND(sa.thumbs_up * 1.0 / NULLIF(sa.total_feedback, 0), 2) AS satisfaction_rate, ",
         "  sa.first_activity, sa.last_activity, sa.days_active, ",
-        "  CASE WHEN DATEDIFF(current_date(), sa.last_activity) <= 7 THEN 'Active' WHEN DATEDIFF(current_date(), sa.last_activity) <= 30 THEN 'Recent' ELSE 'Stale' END AS status, ",
+        "  CASE WHEN DATEDIFF(current_date(), sa.last_activity) <= 7 THEN 'Active (last 7 days)' WHEN DATEDIFF(current_date(), sa.last_activity) <= 30 THEN 'Cooling Off (8-30 days)' ELSE 'Stale (30+ days)' END AS status, ",
         "  COALESCE(sq.queries, 0) AS queries_30d, ",
         "  COALESCE(sq.compute_hours, 0) AS compute_hours, ",
         "  COALESCE(sq.gb_scanned, 0) AS gb_scanned, ",
@@ -632,6 +632,33 @@
         "FROM space_activity sa ",
         "LEFT JOIN space_queries sq ON sa.space_id = sq.space_id ",
         "ORDER BY sa.total_questions DESC "
+      ]
+    },
+    {
+      "name": "ds_daily_genie_cost",
+      "displayName": "Daily Genie Cost",
+      "queryLines": [
+        "WITH daily_warehouse AS ( ",
+        "  SELECT DATE(u.usage_start_time) AS usage_day, usage_metadata.warehouse_id AS wh_id, u.workspace_id, ",
+        "    SUM(usage_quantity * CAST(lp.pricing.default AS DOUBLE)) AS total_cost_usd ",
+        "  FROM system.billing.usage u ",
+        "  LEFT JOIN system.billing.list_prices lp ON u.sku_name = lp.sku_name AND u.cloud = lp.cloud ",
+        "    AND u.usage_start_time >= lp.price_start_time AND (lp.price_end_time IS NULL OR u.usage_start_time < lp.price_end_time) ",
+        "  WHERE u.billing_origin_product = 'SQL' AND usage_metadata.warehouse_id IS NOT NULL ",
+        "  GROUP BY 1, 2, 3 ",
+        "), ",
+        "daily_query_time AS ( ",
+        "  SELECT DATE(start_time) AS query_day, compute.warehouse_id AS wh_id, workspace_id, ",
+        "    SUM(total_duration_ms) AS total_ms, ",
+        "    SUM(CASE WHEN client_application = 'Databricks SQL Genie Space' THEN total_duration_ms ELSE 0 END) AS genie_ms ",
+        "  FROM system.query.history GROUP BY 1, 2, 3 ",
+        ") ",
+        "SELECT dw.usage_day AS event_date, ",
+        "  ROUND(SUM(dw.total_cost_usd * dqt.genie_ms / NULLIF(dqt.total_ms, 0)), 2) AS genie_cost_usd ",
+        "FROM daily_warehouse dw ",
+        "LEFT JOIN daily_query_time dqt ON dw.usage_day = dqt.query_day AND dw.wh_id = dqt.wh_id AND dw.workspace_id = dqt.workspace_id ",
+        "WHERE dqt.genie_ms > 0 ",
+        "GROUP BY dw.usage_day ORDER BY dw.usage_day "
       ]
     }
   ],
@@ -1341,22 +1368,22 @@
                   "fields": [
                     {
                       "fieldName": "dau",
-                      "displayName": "DAU"
+                      "displayName": "Daily Users"
                     },
                     {
                       "fieldName": "trailing_7d",
-                      "displayName": "7-Day Active"
+                      "displayName": "Rolling 7-Day"
                     },
                     {
                       "fieldName": "trailing_28d",
-                      "displayName": "28-Day Active"
+                      "displayName": "Rolling 28-Day"
                     }
                   ]
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Active Users Over Time"
+                "title": "User Activity"
               }
             }
           },
@@ -1374,15 +1401,15 @@
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_monthly_trend",
+                  "datasetName": "ds_daily_genie_cost",
                   "fields": [
                     {
-                      "name": "monthly(month)",
-                      "expression": "DATE_TRUNC(\"MONTH\", `month`)"
+                      "name": "daily(event_date)",
+                      "expression": "DATE_TRUNC(\"DAY\", `event_date`)"
                     },
                     {
-                      "name": "compute_hours",
-                      "expression": "`compute_hours`"
+                      "name": "genie_cost_usd",
+                      "expression": "`genie_cost_usd`"
                     }
                   ],
                   "disaggregated": true
@@ -1394,23 +1421,23 @@
               "widgetType": "bar",
               "encodings": {
                 "x": {
-                  "fieldName": "monthly(month)",
+                  "fieldName": "daily(event_date)",
                   "scale": {
                     "type": "temporal"
                   },
-                  "displayName": "Month"
+                  "displayName": "Date"
                 },
                 "y": {
-                  "fieldName": "compute_hours",
+                  "fieldName": "genie_cost_usd",
                   "scale": {
                     "type": "quantitative"
                   },
-                  "displayName": "Compute Hours"
+                  "displayName": "Cost ($)"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Monthly Genie Compute Cost"
+                "title": "Daily Genie Cost ($)"
               }
             }
           },
