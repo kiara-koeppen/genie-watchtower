@@ -960,16 +960,16 @@
         },
         {
           "widget": {
-            "name": "exec-gb-scanned",
+            "name": "exec-avg-cps-scanned",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_genie_cost",
+                  "datasetName": "ds_genie_daily_ratios",
                   "fields": [
                     {
-                      "name": "sum(gb_scanned)",
-                      "expression": "SUM(`gb_scanned`)"
+                      "name": "avg(cost_per_space)",
+                      "expression": "AVG(`cost_per_space`)"
                     }
                   ],
                   "disaggregated": false
@@ -981,13 +981,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "sum(gb_scanned)",
-                  "displayName": "GB Scanned"
+                  "fieldName": "avg(cost_per_space)",
+                  "displayName": "Avg Cost / Space"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "GB Scanned"
+                "title": "Avg Cost / Space"
               }
             }
           },
@@ -1094,12 +1094,12 @@
               "encodings": {
                 "value": {
                   "fieldName": "stale_spaces",
-                  "displayName": "Stale Spaces (today)"
+                  "displayName": "Stale Spaces"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Stale Spaces (today)"
+                "title": "Stale Spaces"
               }
             }
           },
@@ -1473,7 +1473,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Space Health (today)"
+                "title": "Space Health"
               }
             }
           },
@@ -1895,16 +1895,16 @@
         },
         {
           "widget": {
-            "name": "ws-gb",
+            "name": "ws-avg-cps",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_genie_cost",
+                  "datasetName": "ds_genie_daily_ratios",
                   "fields": [
                     {
-                      "name": "sum(gb_scanned)",
-                      "expression": "SUM(`gb_scanned`)"
+                      "name": "avg(cost_per_space)",
+                      "expression": "AVG(`cost_per_space`)"
                     }
                   ],
                   "disaggregated": false
@@ -1916,13 +1916,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "sum(gb_scanned)",
-                  "displayName": "GB Scanned"
+                  "fieldName": "avg(cost_per_space)",
+                  "displayName": "Avg Cost / Space"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "GB Scanned"
+                "title": "Avg Cost / Space"
               }
             }
           },
@@ -2819,16 +2819,16 @@
         },
         {
           "widget": {
-            "name": "sp-gb",
+            "name": "sp-avg-cps",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_genie_cost",
+                  "datasetName": "ds_genie_daily_ratios",
                   "fields": [
                     {
-                      "name": "sum(gb_scanned)",
-                      "expression": "SUM(`gb_scanned`)"
+                      "name": "avg(cost_per_space)",
+                      "expression": "AVG(`cost_per_space`)"
                     }
                   ],
                   "disaggregated": false
@@ -2840,13 +2840,13 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "sum(gb_scanned)",
-                  "displayName": "GB Scanned"
+                  "fieldName": "avg(cost_per_space)",
+                  "displayName": "Avg Cost / Space"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "GB Scanned"
+                "title": "Avg Cost / Space"
               }
             }
           },
@@ -3254,7 +3254,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Space Health (today)"
+                "title": "Space Health"
               }
             }
           },
