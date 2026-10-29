@@ -5,17 +5,22 @@ Run with: pytest -m live
 """
 import pytest
 
+import os
+
 from scripts.sql import run_sql
 from watchtower.datasets import DATASETS, dataset
 
 pytestmark = pytest.mark.live
+
+# Materialized tables written by notebooks/refresh_watchtower.py (catalog.schema).
+TARGET = os.environ.get("WATCHTOWER_TARGET", "users.kiara_koeppen")
 
 
 @pytest.fixture(scope="module")
 def results():
     out = {}
     for d in DATASETS:
-        cols, rows = run_sql(d.sql)
+        cols, rows = run_sql(f"SELECT * FROM {TARGET}.wt_{d.name.removeprefix('ds_')}")
         out[d.name] = [dict(zip(cols, r)) for r in rows], cols
     return out
 
@@ -70,7 +75,7 @@ def test_agent_ratios_bounded(results):
         for c in ("sql_success_rate", "positive_feedback_rate", "empty_result_rate"):
             v = _num(r[c])
             assert v is None or 0 <= v <= 1, (r["agent_id"], c, v)
-        assert r["health_status"] in {"Healthy", "Growing", "Declining", "Needs attention", "Stale", "Unused", "Trashed"}
+        assert r["health_status"] in {"Healthy", "New", "Growing", "Declining", "Needs attention", "Stale", "Unused", "Trashed"}
 
 
 def test_agent_labels_unique(results):

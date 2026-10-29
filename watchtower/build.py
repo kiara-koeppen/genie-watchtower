@@ -10,7 +10,7 @@ import argparse
 import json
 import pathlib
 
-from watchtower.datasets import build_datasets
+from watchtower.datasets import BASE_ORDER, base_sql, build_datasets, staged
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -22,6 +22,7 @@ PCT = {"type": "number-percent", "decimalPlaces": {"type": "max", "places": 1}}
 
 HEALTH_COLORS = [
     {"value": "Healthy", "color": "#00A972"}, {"value": "Growing", "color": "#2272B4"},
+    {"value": "New", "color": "#8BCAE7"},
     {"value": "Declining", "color": "#FFAB00"}, {"value": "Needs attention", "color": "#FF3621"},
     {"value": "Stale", "color": "#919191"}, {"value": "Unused", "color": "#C4C4C4"},
     {"value": "Trashed", "color": "#5A5A5A"},
@@ -65,13 +66,15 @@ class W:
 
 
 def text(name, lines, width=6, height=1):
-    return W({"name": name, "multilineTextboxSpec": {"lines": lines}}, width, height)
+    # Each entry is its own markdown paragraph.
+    return W({"name": name, "multilineTextboxSpec": {"lines": [l + "\n\n" for l in lines]}}, width, height)
 
 
 def counter(name, ds, column, title, fmt=NUM, description=None, width=1, height=2):
+    # Tiles are small: titles only; definitions live on the About page.
     spec = {"version": 2, "widgetType": "counter",
             "encodings": {"value": {"fieldName": column, "displayName": title, "format": fmt}},
-            "frame": _frame(title, description)}
+            "frame": _frame(title)}
     return W({"name": name, "queries": _query(ds, [col(column)], True), "spec": spec}, width, height)
 
 
@@ -79,7 +82,7 @@ def counter_agg(name, ds, fn, column, title, fmt=NUM, description=None, width=1,
     f = agg(fn, column)
     spec = {"version": 2, "widgetType": "counter",
             "encodings": {"value": {"fieldName": f["name"], "displayName": title, "format": fmt}},
-            "frame": _frame(title, description)}
+            "frame": _frame(title)}
     return W({"name": name, "queries": _query(ds, [f], False), "spec": spec}, width, height)
 
 
@@ -106,14 +109,15 @@ def chart(name, kind, ds, x, ys, title, color=None, x_type="temporal", y_fmt=NUM
     return W({"name": name, "queries": _query(ds, fields, disagg), "spec": spec}, width, height)
 
 
-def pie(name, ds, category, value_fn, value_col, title, mappings=None, width=2, height=5):
+def pie(name, ds, category, value_fn, value_col, title, mappings=None, width=2, height=5,
+        category_label=None, value_label=None):
     v = agg(value_fn, value_col)
-    color = {"fieldName": category, "scale": {"type": "categorical"}, "displayName": category}
+    color = {"fieldName": category, "scale": {"type": "categorical"}, "displayName": category_label or category}
     if mappings:
         color["scale"]["mappings"] = mappings
     spec = {"version": 3, "widgetType": "pie",
             "encodings": {"angle": {"fieldName": v["name"], "scale": {"type": "quantitative"},
-                                    "displayName": value_col},
+                                    "displayName": value_label or value_col},
                           "color": color},
             "frame": _frame(title)}
     return W({"name": name, "queries": _query(ds, [col(category), v], False), "spec": spec}, width, height)
@@ -199,30 +203,30 @@ def exec_page():
          counter("e_sticky", E, "stickiness_dau_mau", "Stickiness (DAU/MAU)", PCT),
          counter("e_sql", E, "sql_success_rate", "SQL success rate", PCT),
          counter("e_coverage", E, "workspace_coverage_pct", "Workspaces using Genie", PCT)],
-        [chart("e_mau_trend", "bar", M, MONTH, [(col("active_users"), "Active users")],
-               "Monthly active users", x_title="Month", y_fmt=INT,
+        [chart("e_mau_trend", "bar", M, MONTH, [(col("active_users"), "Active users"), (col("new_users"), "New users")],
+               "Monthly active and new users", x_title="Month",
                description="Current month is partial"),
-         chart("e_q_trend", "line", M, MONTH, [(col("questions"), "Questions"), (col("new_users"), "New users")],
-               "Questions and new users by month", x_title="Month")],
+         chart("e_q_trend", "line", M, MONTH, [(col("questions"), "Questions")],
+               "Questions by month", x_title="Month", y_fmt=INT)],
         [chart("e_cost_trend", "bar", M, MONTH,
                [(col("billable_cost_usd"), "Genie billable"), (col("sql_compute_cost_usd"), "SQL compute (est.)"),
                 (col("free_usage_value_usd"), "Free usage value")],
                "Monthly cost and free usage value", x_title="Month", stacked=True,
                description="Free usage value shows what free Genie usage would cost at list price"),
-         table("e_top_agents", AG, [("agent_label", "Agent"), ("workspace_name", "Workspace"),
-                                    ("active_users", "Users"), ("questions", "Questions"),
-                                    ("positive_feedback_pct", "Positive feedback %"),
-                                    ("total_cost_usd", "Cost ($)"), ("health_status", "Health")],
-               "Top agents (last 30 days)", width=3, height=5)],
+         table("e_top_agents", "ds_top_agents", [("agent_label", "Agent"), ("active_users", "Users"),
+                                    ("questions", "Questions"), ("positive_feedback_label", "Positive feedback"),
+                                    ("health_status", "Health")],
+               "Top 15 agents (last 30 days)", width=3, height=5)],
         [table("e_workspaces", WS, [("workspace_name", "Workspace"), ("active_users", "Users"),
                                     ("questions", "Questions"), ("active_agents", "Active agents"),
-                                    ("share_of_questions_pct", "Share of questions"),
+                                    ("share_of_questions_label", "Share of questions"),
                                     ("sql_success_pct", "SQL success %"),
-                                    ("positive_feedback_pct", "Positive feedback %"),
+                                    ("positive_feedback_label", "Positive feedback"),
                                     ("total_cost_usd", "Cost ($)"),
                                     ("agents_needing_attention", "Agents needing attention")],
                "Workspace leaderboard", width=4, height=5),
-         pie("e_health", AG, "health_status", "count", "agent_id", "Agent health", HEALTH_COLORS, height=5)],
+         pie("e_health", AG, "health_status", "count", "agent_id", "Agent health", HEALTH_COLORS, height=5,
+             category_label="Health", value_label="Agents")],
         [counter("e_projected", E, "projected_cost_after_free_usd", "Projected cost after free period", USD,
                  "Same usage with free Genie usage billed at list price"),
          counter("e_free", E, "free_usage_value_usd", "Free usage value", USD),
@@ -260,9 +264,9 @@ def workspace_page(default=None):
                [(agg("sum", "questions"), "Questions")], "Weekly questions by channel",
                color=col("channel"), x_title="Week", stacked=True, y_fmt=INT)],
         [table("w_agents_tbl", AG, [("agent_label", "Agent"), ("active_users", "Users"),
-                                    ("questions", "Questions"), ("questions_change_pct", "Change vs prior"),
-                                    ("sql_success_pct", "SQL success %"),
-                                    ("positive_feedback_pct", "Positive feedback %"),
+                                    ("questions", "Questions"), ("questions_change_label", "Change vs prior"),
+                                    ("sql_success_label", "SQL success"),
+                                    ("positive_feedback_label", "Positive feedback"),
                                     ("p50_response_s", "Median response (s)"), ("total_cost_usd", "Cost ($)"),
                                     ("creator", "Creator"), ("health_status", "Health"),
                                     ("health_reason", "Why")],
@@ -272,7 +276,8 @@ def workspace_page(default=None):
                                   ("agents_used_30d", "Agents used"), ("top_agent", "Top agent"),
                                   ("last_seen", "Last seen")],
                "Users", width=4, height=6),
-         pie("w_segments", U, "user_segment", "countdistinct", "user_email", "User segments", height=6)],
+         pie("w_segments", U, "user_segment", "countdistinct", "user_email", "User segments", height=6,
+             category_label="Segment", value_label="Users")],
         [chart("w_cost_agent", "bar", C, col("agent_label"), [(agg("sum", "total_cost_usd"), "Cost")],
                "Cost by agent (all time in view)", x_type="categorical", y_fmt=USD, x_title="Agent"),
          chart("w_cost_daily", "bar", C, time_bucket("WEEK", "event_date"),
@@ -352,9 +357,9 @@ def quality_page():
                [(agg("sum", "comments"), "Comments")], "Weekly comments on answers", x_title="Week",
                y_fmt=INT, description="Users commenting on an answer, often to ask for a review")],
         [table("q_agents", AG, [("agent_label", "Agent"), ("workspace_name", "Workspace"),
-                                ("questions", "Questions"), ("sql_success_pct", "SQL success %"),
+                                ("questions", "Questions"), ("sql_success_label", "SQL success"),
                                 ("empty_result_pct", "Empty result %"),
-                                ("positive_feedback_pct", "Positive feedback %"),
+                                ("positive_feedback_label", "Positive feedback"),
                                 ("thumbs_down", "Negative ratings"), ("comments", "Comments"),
                                 ("p95_response_s", "95th pct SQL time (s)"), ("health_status", "Health"),
                                 ("health_reason", "Why")],
@@ -396,7 +401,8 @@ def cost_page():
                               ("free_usage_value_usd", "Free usage value ($)")],
                "Cost by user (selected dates)", width=4, height=6,
                aggregated={"billable_cost_usd": "sum", "free_usage_value_usd": "sum"}),
-         pie("c_channel", C, "channel", "sum", "total_cost_usd", "Cost by channel", height=6)],
+         pie("c_channel", C, "channel", "sum", "total_cost_usd", "Cost by channel", height=6,
+             category_label="Channel", value_label="Cost")],
     ])
 
 
@@ -412,7 +418,8 @@ def users_page():
          counter("u_all", E, "users_all_time", "Users all time (13 mo)", INT)],
         [chart("u_monthly", "bar", M, MONTH, [(col("active_users"), "Active users"), (col("new_users"), "New users")],
                "Active and new users by month", x_title="Month", width=4),
-         pie("u_segments", U, "user_segment", "countdistinct", "user_email", "User segments (30d)")],
+         pie("u_segments", U, "user_segment", "countdistinct", "user_email", "User segments (30d)",
+             category_label="Segment", value_label="Users")],
         [chart("u_cohorts", "line", R, col("months_since_first"), [(agg("avg", "retention_rate"), "Retention")],
                "Retention by monthly cohort", color=col("cohort_month"), x_type="quantitative", y_fmt=PCT,
                x_title="Months since first question", width=6,
@@ -454,33 +461,54 @@ def governance_page():
     ])
 
 
-def about_page(system_only):
-    names = ("Agent names come from the latest name in the audit log (system-tables-only build)."
-             if system_only else
-             "Agent names come from the `genie_agent_dim` table (refreshed by notebooks/refresh_agent_dim.py), "
-             "falling back to the audit log.")
+def about_page(mode):
+    names = {
+        "system": "Agent names come from the latest name in the audit log (system-tables-only build).",
+        "live": "Agent names come from the `genie_agent_dim` table (refreshed by notebooks/refresh_watchtower.py), "
+                "falling back to the audit log.",
+        "materialized": "Data is pre-computed daily into `wt_*` tables by notebooks/refresh_watchtower.py; agent "
+                        "names come from `genie_agent_dim`, falling back to the audit log.",
+    }[mode]
     return page("about", "About & Definitions", [
         [text("about_txt", [
             "## About Genie Watchtower",
             "**Sources:** system.access.audit (Genie events), system.billing.usage and list_prices "
             "(Genie pay-as-you-go and SQL warehouse cost), system.query.history (Genie-generated SQL), "
             "system.access.workspaces_latest.",
-            f"**Agent names:** {names}",
+            f"**Agent names and refresh:** {names}",
             "**Windows:** KPIs use the last 30 complete days; trends cover 13 months. Costs are list "
-            "price; negotiated discounts are not reflected. Questions are counted for the workspaces "
-            "in this metastore's region that the system tables cover.",
+            "price; negotiated discounts are not reflected. Coverage is whatever the account's system "
+            "tables cover for this metastore's region.",
         ], height=4)],
         [table("about_defs", "ds_definitions", [("kpi", "KPI"), ("definition", "Definition")],
                "KPI definitions", height=10)],
     ])
 
 
-def build_dashboard(system_only=False, workspace_default=None, agent_default=None):
-    datasets = build_datasets(with_dim=not system_only)
+MODES = {
+    # mode: (output file, uses agent dim)
+    "live": ("dashboard.json", True),
+    "system": ("dashboard_system_only.json", False),
+    "materialized": ("dashboard_materialized.json", True),
+}
+
+
+def build_dashboard(mode="live", target=None, workspace_default=None, agent_default=None):
+    """mode: live (system tables + genie_agent_dim), system (system tables only), or
+    materialized (reads wt_* tables written by the refresh notebook).
+    target: 'catalog.schema' holding genie_agent_dim / wt_* tables."""
+    target = target or "main.genie_watchtower"
+    datasets = build_datasets(with_dim=MODES[mode][1], dim_table=f"{target}.genie_agent_dim")
+
+    def sql(d):
+        if mode == "materialized":
+            return f"SELECT * FROM {target}.wt_{d.name.removeprefix('ds_')}"
+        return d.sql
+
     return {
-        "datasets": [{"name": d.name, "displayName": d.display, "queryLines": [d.sql]} for d in datasets],
+        "datasets": [{"name": d.name, "displayName": d.display, "queryLines": [sql(d)]} for d in datasets],
         "pages": [exec_page(), workspace_page(workspace_default), agent_page(agent_default), quality_page(),
-                  cost_page(), users_page(), governance_page(), about_page(system_only)],
+                  cost_page(), users_page(), governance_page(), about_page(mode)],
         "uiSettings": {"theme": {"widgetHeaderAlignment": "LEFT"}},
     }
 
@@ -489,13 +517,31 @@ def single_select_default(value):
     return {"defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": value}]}}}
 
 
+def write_sql_files(target):
+    """SQL used by the refresh notebook, run in file-name order:
+    NN_base_<base>.sql -> wt_base_<base> (one scan of each system table), then
+    ds_<name>.sql -> wt_<name> (reads only the wt_base_* tables)."""
+    out = ROOT / "sql"
+    out.mkdir(exist_ok=True)
+    for f in out.glob("*.sql"):
+        f.unlink()
+    dim = f"{target}.genie_agent_dim"
+    for i, base in enumerate(BASE_ORDER):
+        (out / f"{i:02d}_base_{base}.sql").write_text(base_sql(base, target, with_dim=dim) + "\n")
+    with staged(target):
+        for d in build_datasets(with_dim=True, dim_table=dim):
+            (out / f"{d.name}.sql").write_text(d.sql + "\n")
+
+
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--system-only", action="store_true")
+    p.add_argument("--target", default="main.genie_watchtower",
+                   help="catalog.schema for genie_agent_dim and wt_* tables")
     a = p.parse_args()
-    out = ROOT / ("dashboard_system_only.json" if a.system_only else "dashboard.json")
-    out.write_text(json.dumps(build_dashboard(system_only=a.system_only), indent=2) + "\n")
-    print(out)
+    for mode, (fname, _) in MODES.items():
+        (ROOT / fname).write_text(json.dumps(build_dashboard(mode, a.target), indent=2) + "\n")
+        print(ROOT / fname)
+    write_sql_files("__TARGET__")  # the refresh notebook substitutes its catalog.schema
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ EXPECTED_PAGES = [
 
 @pytest.fixture(scope="module")
 def dash():
-    return build_dashboard()
+    return build_dashboard("live", "cat.sch")
 
 
 def _canvas_pages(dash):
@@ -126,6 +126,12 @@ def test_no_em_dashes_in_text(dash):
     assert "—" not in json.dumps(dash, ensure_ascii=False)
 
 
-def test_committed_json_matches_builder(dash):
-    path = pathlib.Path(__file__).resolve().parents[1] / "dashboard.json"
-    assert json.loads(path.read_text()) == dash, "run: python -m watchtower.build"
+def test_materialized_variant_reads_wt_tables():
+    d = build_dashboard("materialized", "cat.sch")
+    for ds in d["datasets"]:
+        assert ds["queryLines"][0].startswith("SELECT * FROM cat.sch.wt_"), ds["name"]
+
+
+def test_system_variant_has_no_dim_table():
+    d = build_dashboard("system")
+    assert "dim_names" not in json.dumps(d["datasets"])

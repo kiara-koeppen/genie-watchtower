@@ -43,6 +43,63 @@ PRIOR = ("event_date >= date_sub(current_date(), 60) "
 HISTORY = "add_months(trunc(current_date(), 'MM'), -12)"
 
 
+# ---------------------------------------------------------------- staging
+# In materialized mode the refresh notebook scans each system table once into a
+# wt_base_* table; every dataset then reads those small tables instead of re-scanning.
+_STAGE = {"target": None, "expand": None}
+
+# base name -> CTE name it provides
+BASES = {
+    "questions": "questions", "conversations": "conversations", "feedback": "feedback",
+    "comments": "comments", "curation": "curation", "genie_sql": "genie_sql",
+    "genie_billing": "genie_billing", "sql_compute": "genie_sql_compute", "agents": "agent_labels",
+}
+BASE_ORDER = list(BASES)  # agents last: it reads the staged questions table
+
+
+def _staged(base):
+    def deco(fn):
+        def wrapper(*args, **kwargs):
+            t = _STAGE["target"]
+            if t and _STAGE["expand"] != base:
+                return f"{BASES[base]} AS (SELECT * FROM {t}.wt_base_{base})"
+            return fn(*args, **kwargs)
+        wrapper.__name__ = fn.__name__
+        return wrapper
+    return deco
+
+
+class staged:
+    """Context manager: build SQL that reads wt_base_* tables in `target`."""
+
+    def __init__(self, target, expand=None):
+        self.target, self.expand = target, expand
+
+    def __enter__(self):
+        self._old = dict(_STAGE)
+        _STAGE.update(target=self.target, expand=self.expand)
+
+    def __exit__(self, *exc):
+        _STAGE.update(self._old)
+
+
+def base_sql(base, target, with_dim=True):
+    """SQL that materializes one wt_base_<base> table (other bases read as staged)."""
+    fns = {
+        "questions": lambda: (cte_questions(),),
+        "conversations": lambda: (cte_conversations(),),
+        "feedback": lambda: (cte_feedback(),),
+        "comments": lambda: (cte_comments(),),
+        "curation": lambda: (cte_curation(),),
+        "genie_sql": lambda: (cte_genie_sql(),),
+        "genie_billing": lambda: (cte_prices(), cte_genie_billing()),
+        "sql_compute": lambda: (cte_prices(), cte_sql_compute()),
+        "agents": lambda: agent_ctes(with_dim),
+    }
+    with staged(target, expand=base):
+        return with_ctes(*fns[base]()) + f"\nSELECT * FROM {BASES[base]}"
+
+
 # ---------------------------------------------------------------- shared CTEs
 def cte_workspaces():
     return """workspaces AS (
@@ -51,6 +108,7 @@ def cte_workspaces():
 )"""
 
 
+@_staged("questions")
 def cte_questions():
     return f"""questions AS (
   SELECT
@@ -70,6 +128,7 @@ def cte_questions():
 )"""
 
 
+@_staged("conversations")
 def cte_conversations():
     return f"""conversations AS (
   SELECT a.event_date, a.request_params['space_id'] AS agent_id, lower(a.user_identity.email) AS user_email
@@ -82,6 +141,7 @@ def cte_conversations():
 )"""
 
 
+@_staged("feedback")
 def cte_feedback():
     # Users can change a rating; keep the latest rating per message.
     return f"""feedback AS (
@@ -103,6 +163,7 @@ def cte_feedback():
 )"""
 
 
+@_staged("comments")
 def cte_comments():
     return f"""comments AS (
   SELECT a.event_date, a.request_params['space_id'] AS agent_id
@@ -112,6 +173,7 @@ def cte_comments():
 )"""
 
 
+@_staged("curation")
 def cte_curation():
     return f"""curation AS (
   SELECT a.event_date, a.request_params['space_id'] AS agent_id, lower(a.user_identity.email) AS user_email,
@@ -124,6 +186,7 @@ def cte_curation():
 )"""
 
 
+@_staged("genie_sql")
 def cte_genie_sql():
     return f"""genie_sql AS (
   SELECT DATE(start_time) AS event_date,
@@ -160,6 +223,7 @@ free_rate AS (
 )"""
 
 
+@_staged("genie_billing")
 def cte_genie_billing():
     # Includes RETRACTION / RESTATEMENT rows so corrections net out when summed.
     return f"""genie_billing AS (
@@ -184,6 +248,7 @@ def cte_genie_billing():
 )"""
 
 
+@_staged("sql_compute")
 def cte_sql_compute():
     # Genie answers run SQL on the agent's warehouse. Attribute each warehouse's
     # daily list-price cost to agents by their share of that warehouse's query time.
@@ -218,10 +283,13 @@ genie_sql_compute AS (
 )"""
 
 
+@_staged("agents")
 def cte_agents(with_dim):
+    """with_dim is False (audit names only) or the agent-dim table name to join."""
+    dim_table = with_dim if isinstance(with_dim, str) else AGENT_DIM
     dim_name = (f"""dim_names AS (
   SELECT agent_id, title AS dim_title, CAST(workspace_id AS STRING) AS dim_workspace_id
-  FROM {AGENT_DIM}
+  FROM {dim_table}
 ),""" if with_dim else "")
     dim_join = "LEFT JOIN dim_names d ON d.agent_id = u.agent_id" if with_dim else ""
     name_expr = "coalesce(d.dim_title, n.audit_name)" if with_dim else "n.audit_name"
@@ -306,7 +374,7 @@ class Dataset:
     columns: tuple
     sql_builder: object = field(repr=False)
     may_be_empty: bool = False
-    with_dim: bool = True
+    with_dim: object = True  # False, True, or the agent-dim table name
 
     @property
     def sql(self):
@@ -406,6 +474,13 @@ SELECT
   coalesce(q.questions, 0) AS questions,
   coalesce(qp.questions_prior, 0) AS questions_prior,
   try_divide(coalesce(q.questions, 0) - qp.questions_prior, qp.questions_prior) AS questions_change_pct,
+  CASE WHEN coalesce(qp.questions_prior, 0) = 0 THEN 'New'
+       ELSE concat(CASE WHEN q.questions >= qp.questions_prior THEN '+' ELSE '' END,
+                   CAST(round(try_divide(coalesce(q.questions, 0) - qp.questions_prior, qp.questions_prior) * 100) AS INT), '%')
+  END AS questions_change_label,
+  coalesce(cast(round(try_divide(f.thumbs_up, f.thumbs_up + f.thumbs_down) * 100) AS INT) || '%', 'No ratings')
+    AS positive_feedback_label,
+  coalesce(cast(round(s.sql_success_rate * 100, 1) AS STRING) || '%', 'No SQL') AS sql_success_label,
   coalesce(cv.conversations, 0) AS conversations,
   try_divide(q.questions, cv.conversations) AS questions_per_conversation,
   try_divide(q.api_questions, q.questions) AS api_share_pct,
@@ -435,7 +510,8 @@ SELECT
          OR (f.thumbs_up + f.thumbs_down >= 5 AND try_divide(f.thumbs_up, f.thumbs_up + f.thumbs_down) < 0.6))
       THEN 'Needs attention'
     WHEN qp.questions_prior >= 10 AND q.questions < 0.5 * qp.questions_prior THEN 'Declining'
-    WHEN coalesce(qp.questions_prior, 0) = 0 OR q.questions >= 1.5 * qp.questions_prior THEN 'Growing'
+    WHEN coalesce(qp.questions_prior, 0) = 0 THEN 'New'
+    WHEN q.questions >= 1.5 * qp.questions_prior THEN 'Growing'
     ELSE 'Healthy'
   END AS health_status,
   CASE
@@ -489,6 +565,8 @@ LEFT JOIN (
 LEFT JOIN (
   SELECT agent_id, sum(sql_compute_cost_usd) AS sql_compute_cost_usd
   FROM genie_sql_compute WHERE {CUR} GROUP BY 1) sc ON sc.agent_id = a.agent_id
+-- Trashed agents only matter while they still get questions in the window.
+WHERE a.trashed_date IS NULL OR q.questions > 0
 """
 
 
@@ -508,10 +586,15 @@ def _agent_kpis(with_dim):
     return with_ctes(*_all_agent_ctes(with_dim)) + _agent_kpis_body() + "ORDER BY questions DESC, agent_label"
 
 
+def _top_agents(with_dim):
+    return with_ctes(*_all_agent_ctes(with_dim)) + _agent_kpis_body() + "ORDER BY questions DESC, agent_label LIMIT 15"
+
+
 AGENT_COLUMNS = (
     "agent_id", "agent_label", "agent_name", "workspace_name", "creator", "created_date",
     "last_used_date", "days_since_last_use", "last_edited_date", "active_users", "active_users_prior",
-    "questions", "questions_prior", "questions_change_pct", "conversations",
+    "questions", "questions_prior", "questions_change_pct", "questions_change_label",
+    "positive_feedback_label", "sql_success_label", "conversations",
     "questions_per_conversation", "api_share_pct", "sql_queries", "sql_success_rate",
     "empty_result_rate", "p50_response_s", "p95_response_s", "sql_success_pct", "empty_result_pct",
     "thumbs_up", "thumbs_down", "positive_feedback_rate", "positive_feedback_pct", "comments", "curation_events_30d", "benchmark_runs_30d",
@@ -565,6 +648,8 @@ SELECT
   fb.positive_feedback_rate,
   round(s.sql_success_rate * 100, 1) AS sql_success_pct,
   round(fb.positive_feedback_rate * 100, 1) AS positive_feedback_pct,
+  coalesce(cast(round(fb.positive_feedback_rate * 100) AS INT) || '%', 'No ratings') AS positive_feedback_label,
+  concat(CAST(round(try_divide(coalesce(c.questions, 0), (SELECT n FROM total_q)) * 100) AS INT), '%') AS share_of_questions_label,
   round(coalesce(k.billable, 0), 2) AS billable_cost_usd,
   round(coalesce(k.free_value, 0), 2) AS free_usage_value_usd,
   round(coalesce(m.compute, 0), 2) AS sql_compute_cost_usd,
@@ -590,7 +675,7 @@ WORKSPACE_COLUMNS = (
     "workspace_name", "active_users", "active_users_prior", "active_users_change_pct", "questions",
     "questions_prior", "questions_change_pct", "active_agents", "agents_total", "new_users",
     "questions_per_user", "sql_success_rate", "positive_feedback_rate", "sql_success_pct",
-    "positive_feedback_pct", "billable_cost_usd",
+    "positive_feedback_pct", "positive_feedback_label", "share_of_questions_label", "billable_cost_usd",
     "free_usage_value_usd", "sql_compute_cost_usd", "total_cost_usd", "cost_per_active_user",
     "agents_needing_attention", "share_of_questions_pct",
 )
@@ -767,6 +852,7 @@ _SPECS = [
      "billable_cost_usd", "free_usage_value_usd", "sql_compute_cost_usd", "is_partial_month"), _monthly_trend, False),
     ("ds_workspace_kpis", "Workspace KPIs (last 30 days)", WORKSPACE_COLUMNS, _workspace_kpis, False),
     ("ds_agent_kpis", "Agent KPIs (last 30 days)", AGENT_COLUMNS, _agent_kpis, False),
+    ("ds_top_agents", "Top 15 agents (last 30 days)", AGENT_COLUMNS, _top_agents, False),
     ("ds_daily_activity", "Daily activity", ("event_date", "workspace_name", "agent_label", "user_email", "channel",
      "mode", "questions"), _daily_activity, False),
     ("ds_quality_daily", "Daily quality", ("event_date", "workspace_name", "agent_label", "sql_succeeded",
@@ -785,12 +871,13 @@ _SPECS = [
 ]
 
 
-def build_datasets(with_dim=True):
-    return [Dataset(n, d, c, b, e, with_dim) for n, d, c, b, e in _SPECS]
+def build_datasets(with_dim=True, dim_table=AGENT_DIM):
+    dim = dim_table if with_dim else False
+    return [Dataset(n, d, c, b, e, dim) for n, d, c, b, e in _SPECS]
 
 
 DATASETS = build_datasets(with_dim=True)
 
 
-def dataset(name, with_dim=True):
-    return next(d for d in build_datasets(with_dim) if d.name == name)
+def dataset(name, with_dim=True, dim_table=AGENT_DIM):
+    return next(d for d in build_datasets(with_dim, dim_table) if d.name == name)
