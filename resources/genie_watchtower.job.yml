@@ -1,0 +1,29 @@
+resources:
+  jobs:
+    genie_watchtower_refresh:
+      name: Genie Watchtower refresh
+      description: >-
+        Daily refresh for the Genie Watchtower dashboard. Lists Genie agents into genie_agent_dim, scans
+        system tables once into wt_base_* tables, then builds the wt_* KPI tables the dashboard reads.
+      schedule:
+        quartz_cron_expression: ${var.refresh_schedule}
+        timezone_id: ${var.refresh_timezone}
+        pause_status: UNPAUSED
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      tasks:
+        - task_key: refresh
+          notebook_task:
+            notebook_path: ../src/notebooks/refresh_watchtower.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              materialize: "true"
+              extra_workspace_hosts: ${var.extra_workspace_hosts}
+          environment_key: default
+      environments:
+        - environment_key: default
+          spec:
+            client: "3"
+      tags:
+        project: genie-watchtower

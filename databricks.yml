@@ -1,0 +1,48 @@
+# Genie Watchtower: Genie adoption, quality and cost monitoring on Databricks system tables.
+#
+#   databricks bundle deploy -t prod --var="warehouse_id=<id>" --var="catalog=<catalog>"
+#   databricks bundle run genie_watchtower_refresh -t prod
+#
+bundle:
+  name: genie_watchtower
+
+include:
+  - resources/*.yml
+
+# Only the notebook and generated SQL run in the workspace; builder, tests and dev scripts stay local.
+sync:
+  exclude:
+    - watchtower/**
+    - tests/**
+    - scripts/**
+    - pytest.ini
+
+variables:
+  catalog:
+    # Required on purpose: no silent fallback to a shared catalog like `main`. The tables
+    # hold user emails and usage, so put them where only the intended audience can read them.
+    description: Catalog for the genie_agent_dim and wt_* tables (must already exist).
+  schema:
+    description: Schema for the genie_agent_dim and wt_* tables (created if missing).
+    default: genie_watchtower
+  warehouse_id:
+    description: SQL warehouse the dashboard runs on (a small serverless warehouse is plenty).
+  extra_workspace_hosts:
+    description: >-
+      Optional comma-separated workspace URLs to also pull Genie agent names from. Leave blank to
+      name agents from this workspace only (others fall back to audit-log names).
+    default: ""
+  refresh_schedule:
+    description: Quartz cron for the daily refresh.
+    default: "0 0 6 * * ?"
+  refresh_timezone:
+    default: America/Denver
+
+targets:
+  dev:
+    mode: development
+    default: true
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}

@@ -1,0 +1,10 @@
+resources:
+  dashboards:
+    genie_watchtower:
+      display_name: Genie Watchtower
+      file_path: ../src/genie_watchtower.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      # Dataset queries use unqualified wt_* table names; these point them at the refresh job's output.
+      dataset_catalog: ${var.catalog}
+      dataset_schema: ${var.schema}
+      embed_credentials: false
