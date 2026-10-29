@@ -56,14 +56,21 @@ agents AS (
   LEFT JOIN q_last q ON q.agent_id = u.agent_id
   WHERE u.agent_id IS NOT NULL
 ),
-agent_labels AS (
+agent_labels_draft AS (
   SELECT a.*,
          coalesce(w.workspace_name, a.workspace_id, 'Unknown workspace') AS workspace_name,
          CASE WHEN a.agent_name IS NULL
                 THEN concat('Unnamed agent ', right(a.agent_id, 6))
               WHEN count(*) OVER (PARTITION BY lower(a.agent_name)) > 1
                 THEN concat(a.agent_name, ' (', right(a.agent_id, 6), ')')
-              ELSE a.agent_name END AS agent_label
+              ELSE a.agent_name END AS draft_label
   FROM agents a LEFT JOIN workspaces w ON w.workspace_id = a.workspace_id
+),
+agent_labels AS (
+  -- Labels must be unique for the drill-down picker; on a short-id collision use the full id.
+  SELECT * EXCEPT (draft_label),
+         CASE WHEN count(*) OVER (PARTITION BY draft_label) > 1
+              THEN concat(draft_label, ' [', agent_id, ']') ELSE draft_label END AS agent_label
+  FROM agent_labels_draft
 )
 SELECT * FROM agent_labels
