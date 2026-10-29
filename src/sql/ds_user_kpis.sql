@@ -38,7 +38,7 @@ SELECT l.user_email, l.workspace_name,
        coalesce(c.questions_30d, 0) AS questions_30d,
        coalesce(c.active_days_30d, 0) AS active_days_30d,
        coalesce(c.agents_used_30d, 0) AS agents_used_30d,
-       ta.agent_label AS top_agent,
+       coalesce(ta.agent_label, 'None in 30 days') AS top_agent,
        l.first_seen, l.last_seen,
        CASE WHEN l.first_seen >= date_sub(current_date(), 30) THEN 'New'
             WHEN coalesce(c.questions_30d, 0) = 0 THEN 'Dormant'

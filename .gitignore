@@ -1,2 +1,5 @@
-.venv/
+__pycache__/
+.databricks/
 .deploy_state.json
+.pytest_cache/
+.venv/

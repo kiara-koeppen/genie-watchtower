@@ -25,7 +25,7 @@ def run_sql(sql, profile=None, warehouse=None, timeout_s=600):
         resp = _api("get", f"/api/2.0/sql/statements/{resp['statement_id']}", profile)
     if resp["status"]["state"] != "SUCCEEDED":
         raise RuntimeError(resp["status"].get("error", {}).get("message", resp["status"]))
-    cols = [c["name"] for c in resp["manifest"]["schema"]["columns"]]
+    cols = [c["name"] for c in resp.get("manifest", {}).get("schema", {}).get("columns", [])]
     rows = resp.get("result", {}).get("data_array", []) or []
     return cols, rows
 

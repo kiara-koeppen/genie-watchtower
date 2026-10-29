@@ -27,7 +27,7 @@
 
 dbutils.widgets.text("catalog", "main", "Catalog")
 dbutils.widgets.text("schema", "genie_watchtower", "Schema")
-dbutils.widgets.dropdown("materialize", "false", ["true", "false"], "Materialize KPI tables")
+dbutils.widgets.dropdown("materialize", "true", ["true", "false"], "Materialize KPI tables")
 dbutils.widgets.text("extra_workspace_hosts", "", "Extra workspace URLs (comma-separated)")
 
 catalog = dbutils.widgets.get("catalog")

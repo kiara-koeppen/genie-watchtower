@@ -472,7 +472,8 @@ def _agent_kpis_body():
     genie_billing and genie_sql_compute CTEs to be in scope."""
     return f"""
 SELECT
-  a.agent_id, a.agent_label, a.agent_name, a.workspace_name, a.creator, a.created_date,
+  a.agent_id, a.agent_label, a.agent_name, a.workspace_name, coalesce(a.creator, 'Unknown') AS creator,
+  a.created_date,
   a.last_used_date,
   datediff(current_date(), a.last_used_date) AS days_since_last_use,
   ed.last_edited_date,
@@ -508,7 +509,7 @@ SELECT
   round(coalesce(b.billable_cost_usd, 0) + coalesce(sc.sql_compute_cost_usd, 0), 2) AS total_cost_usd,
   round(try_divide(coalesce(b.billable_cost_usd, 0) + coalesce(sc.sql_compute_cost_usd, 0), q.questions), 3)
     AS cost_per_question,
-  q.top_user,
+  coalesce(q.top_user, 'None in 30 days') AS top_user,
   CASE
     WHEN a.trashed_date IS NOT NULL THEN 'Trashed'
     WHEN a.last_used_date IS NULL THEN 'Unused'
@@ -798,7 +799,7 @@ SELECT l.user_email, l.workspace_name,
        coalesce(c.questions_30d, 0) AS questions_30d,
        coalesce(c.active_days_30d, 0) AS active_days_30d,
        coalesce(c.agents_used_30d, 0) AS agents_used_30d,
-       ta.agent_label AS top_agent,
+       coalesce(ta.agent_label, 'None in 30 days') AS top_agent,
        l.first_seen, l.last_seen,
        CASE WHEN l.first_seen >= date_sub(current_date(), 30) THEN 'New'
             WHEN coalesce(c.questions_30d, 0) = 0 THEN 'Dormant'

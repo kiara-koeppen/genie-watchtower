@@ -29,9 +29,14 @@ free_rate AS (
 ),
 genie_billing AS (SELECT * FROM __TARGET__.wt_base_genie_billing),
 genie_sql_compute AS (SELECT * FROM __TARGET__.wt_base_sql_compute)
-, ag AS (
+, cur_q AS (SELECT * FROM questions WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date()),
+prior_q AS (SELECT * FROM questions WHERE event_date >= date_sub(current_date(), 60) AND event_date < date_sub(current_date(), 30)),
+first_seen AS (SELECT user_email, min(event_date) AS first_date FROM questions GROUP BY 1),
+daily_users AS (SELECT event_date, count(DISTINCT user_email) AS dau FROM cur_q GROUP BY 1),
+health AS (SELECT count_if(health_status IN ('Needs attention', 'Declining')) AS n FROM (
 SELECT
-  a.agent_id, a.agent_label, a.agent_name, a.workspace_name, a.creator, a.created_date,
+  a.agent_id, a.agent_label, a.agent_name, a.workspace_name, coalesce(a.creator, 'Unknown') AS creator,
+  a.created_date,
   a.last_used_date,
   datediff(current_date(), a.last_used_date) AS days_since_last_use,
   ed.last_edited_date,
@@ -67,7 +72,7 @@ SELECT
   round(coalesce(b.billable_cost_usd, 0) + coalesce(sc.sql_compute_cost_usd, 0), 2) AS total_cost_usd,
   round(try_divide(coalesce(b.billable_cost_usd, 0) + coalesce(sc.sql_compute_cost_usd, 0), q.questions), 3)
     AS cost_per_question,
-  q.top_user,
+  coalesce(q.top_user, 'None in 30 days') AS top_user,
   CASE
     WHEN a.trashed_date IS NOT NULL THEN 'Trashed'
     WHEN a.last_used_date IS NULL THEN 'Unused'
@@ -133,67 +138,60 @@ LEFT JOIN (
   FROM genie_sql_compute WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date() GROUP BY 1) sc ON sc.agent_id = a.agent_id
 -- Trashed agents only matter while they still get questions in the window.
 WHERE a.trashed_date IS NULL OR q.questions > 0
-),
-ws_q AS (SELECT coalesce(w.workspace_name, q.workspace_id) AS workspace_name, q.*
-         FROM questions q LEFT JOIN workspaces w ON w.workspace_id = q.workspace_id),
-first_seen AS (SELECT user_email, workspace_name, min(event_date) AS first_date FROM ws_q GROUP BY 1, 2),
-ws_cost AS (
-  SELECT coalesce(w.workspace_name, b.workspace_id) AS workspace_name,
-         sum(billable_cost_usd) AS billable, sum(free_usage_value_usd) AS free_value
-  FROM genie_billing b LEFT JOIN workspaces w ON w.workspace_id = b.workspace_id
-  WHERE b.event_date >= date_sub(current_date(), 30) AND b.event_date < current_date() GROUP BY 1),
-ws_compute AS (
-  SELECT coalesce(w.workspace_name, c.workspace_id) AS workspace_name, sum(sql_compute_cost_usd) AS compute
-  FROM genie_sql_compute c LEFT JOIN workspaces w ON w.workspace_id = c.workspace_id
-  WHERE c.event_date >= date_sub(current_date(), 30) AND c.event_date < current_date() GROUP BY 1),
-ws_sql AS (
-  SELECT coalesce(w.workspace_name, s.workspace_id) AS workspace_name,
-         try_divide(count_if(execution_status = 'FINISHED'),
-                    count_if(execution_status IN ('FINISHED', 'FAILED'))) AS sql_success_rate
-  FROM genie_sql s LEFT JOIN workspaces w ON w.workspace_id = s.workspace_id
-  WHERE s.event_date >= date_sub(current_date(), 30) AND s.event_date < current_date() GROUP BY 1),
-ws_fb AS (
-  SELECT a.workspace_name, try_divide(sum(is_positive), sum(is_positive) + sum(is_negative)) AS positive_feedback_rate
-  FROM feedback f JOIN agent_labels a ON a.agent_id = f.agent_id
-  WHERE f.event_date >= date_sub(current_date(), 30) AND f.event_date < current_date() GROUP BY 1),
-ws_list AS (SELECT DISTINCT workspace_name FROM ws_q),
-total_q AS (SELECT count(*) AS n FROM questions WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date())
+))
 SELECT
-  l.workspace_name,
-  coalesce(c.active_users, 0) AS active_users,
-  coalesce(p.active_users_prior, 0) AS active_users_prior,
-  try_divide(coalesce(c.active_users, 0) - p.active_users_prior, p.active_users_prior) AS active_users_change_pct,
-  coalesce(c.questions, 0) AS questions,
-  coalesce(p.questions_prior, 0) AS questions_prior,
-  try_divide(coalesce(c.questions, 0) - p.questions_prior, p.questions_prior) AS questions_change_pct,
-  coalesce(c.active_agents, 0) AS active_agents,
-  (SELECT count(*) FROM agent_labels x WHERE x.workspace_name = l.workspace_name AND x.trashed_date IS NULL)
-    AS agents_total,
-  (SELECT count(*) FROM first_seen fs WHERE fs.workspace_name = l.workspace_name
-     AND fs.first_date >= date_sub(current_date(), 30) AND fs.first_date < current_date()) AS new_users,
-  try_divide(c.questions, c.active_users) AS questions_per_user,
-  s.sql_success_rate,
-  fb.positive_feedback_rate,
-  round(s.sql_success_rate * 100, 1) AS sql_success_pct,
-  round(fb.positive_feedback_rate * 100, 1) AS positive_feedback_pct,
-  coalesce(cast(round(fb.positive_feedback_rate * 100) AS INT) || '%', 'No ratings') AS positive_feedback_label,
-  concat(CAST(round(try_divide(coalesce(c.questions, 0), (SELECT n FROM total_q)) * 100) AS INT), '%') AS share_of_questions_label,
-  round(coalesce(k.billable, 0), 2) AS billable_cost_usd,
-  round(coalesce(k.free_value, 0), 2) AS free_usage_value_usd,
-  round(coalesce(m.compute, 0), 2) AS sql_compute_cost_usd,
-  round(coalesce(k.billable, 0) + coalesce(m.compute, 0), 2) AS total_cost_usd,
-  round(try_divide(coalesce(k.billable, 0) + coalesce(m.compute, 0), c.active_users), 2) AS cost_per_active_user,
-  (SELECT count(*) FROM ag WHERE ag.workspace_name = l.workspace_name
-     AND ag.health_status IN ('Needs attention', 'Declining')) AS agents_needing_attention,
-  try_divide(coalesce(c.questions, 0), (SELECT n FROM total_q)) AS share_of_questions_pct
-FROM ws_list l
-LEFT JOIN (SELECT workspace_name, count(*) AS questions, count(DISTINCT user_email) AS active_users,
-                  count(DISTINCT agent_id) AS active_agents
-           FROM ws_q WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date() GROUP BY 1) c ON c.workspace_name = l.workspace_name
-LEFT JOIN (SELECT workspace_name, count(*) AS questions_prior, count(DISTINCT user_email) AS active_users_prior
-           FROM ws_q WHERE event_date >= date_sub(current_date(), 60) AND event_date < date_sub(current_date(), 30) GROUP BY 1) p ON p.workspace_name = l.workspace_name
-LEFT JOIN ws_sql s ON s.workspace_name = l.workspace_name
-LEFT JOIN ws_fb fb ON fb.workspace_name = l.workspace_name
-LEFT JOIN ws_cost k ON k.workspace_name = l.workspace_name
-LEFT JOIN ws_compute m ON m.workspace_name = l.workspace_name
-ORDER BY questions DESC
+  date_sub(current_date(), 1) AS as_of,
+  (SELECT count(DISTINCT user_email) FROM cur_q) AS active_users,
+  (SELECT count(DISTINCT user_email) FROM prior_q) AS active_users_prior,
+  try_divide((SELECT count(DISTINCT user_email) FROM cur_q) - (SELECT count(DISTINCT user_email) FROM prior_q),
+             (SELECT count(DISTINCT user_email) FROM prior_q)) AS active_users_change_pct,
+  (SELECT count(*) FROM cur_q) AS questions,
+  (SELECT count(*) FROM prior_q) AS questions_prior,
+  try_divide((SELECT count(*) FROM cur_q) - (SELECT count(*) FROM prior_q), (SELECT count(*) FROM prior_q))
+    AS questions_change_pct,
+  (SELECT count(DISTINCT agent_id) FROM cur_q) AS active_agents,
+  (SELECT count(DISTINCT agent_id) FROM prior_q) AS active_agents_prior,
+  (SELECT count(*) FROM first_seen WHERE first_date >= date_sub(current_date(), 30)
+     AND first_date < current_date()) AS new_users,
+  (SELECT count(DISTINCT user_email) FROM questions) AS users_all_time,
+  try_divide((SELECT count(*) FROM cur_q), (SELECT count(DISTINCT user_email) FROM cur_q)) AS questions_per_user,
+  try_divide((SELECT avg(dau) FROM daily_users), (SELECT count(DISTINCT user_email) FROM cur_q))
+    AS stickiness_dau_mau,
+  try_divide((SELECT count(DISTINCT p.user_email) FROM prior_q p
+              WHERE p.user_email IN (SELECT user_email FROM cur_q)),
+             (SELECT count(DISTINCT user_email) FROM prior_q)) AS user_retention_rate,
+  (SELECT count(DISTINCT workspace_id) FROM cur_q) AS workspaces_with_genie,
+  (SELECT count(*) FROM workspaces WHERE status = 'RUNNING' OR status IS NULL) AS workspaces_total,
+  try_divide((SELECT count(DISTINCT workspace_id) FROM cur_q),
+             (SELECT count(*) FROM workspaces WHERE status = 'RUNNING' OR status IS NULL))
+    AS workspace_coverage_pct,
+  (SELECT count(*) FROM agent_labels WHERE created_date >= date_sub(current_date(), 30)) AS agents_created,
+  (SELECT count(*) FROM agent_labels WHERE trashed_date IS NULL) AS agents_total,
+  (SELECT try_divide(count_if(execution_status = 'FINISHED'),
+                     count_if(execution_status IN ('FINISHED', 'FAILED')))
+     FROM genie_sql WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date()) AS sql_success_rate,
+  (SELECT try_divide(sum(is_positive), sum(is_positive) + sum(is_negative)) FROM feedback WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date())
+    AS positive_feedback_rate,
+  (SELECT count(*) FROM feedback WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date()) AS feedback_count,
+  (SELECT round(percentile(total_duration_ms, 0.5) / 1000, 1) FROM genie_sql
+     WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date() AND execution_status = 'FINISHED') AS p50_response_s,
+  (SELECT round(coalesce(sum(billable_cost_usd), 0), 2) FROM genie_billing WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date()) AS billable_cost_usd,
+  (SELECT round(coalesce(sum(free_usage_value_usd), 0), 2) FROM genie_billing WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date())
+    AS free_usage_value_usd,
+  (SELECT round(coalesce(sum(sql_compute_cost_usd), 0), 2) FROM genie_sql_compute WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date())
+    AS sql_compute_cost_usd,
+  round((SELECT coalesce(sum(billable_cost_usd), 0) FROM genie_billing WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date())
+      + (SELECT coalesce(sum(sql_compute_cost_usd), 0) FROM genie_sql_compute WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date()), 2) AS total_cost_usd,
+  round(try_divide((SELECT coalesce(sum(billable_cost_usd), 0) FROM genie_billing WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date())
+      + (SELECT coalesce(sum(sql_compute_cost_usd), 0) FROM genie_sql_compute WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date()),
+      (SELECT count(DISTINCT user_email) FROM cur_q)), 2) AS cost_per_active_user,
+  round(try_divide((SELECT coalesce(sum(billable_cost_usd), 0) FROM genie_billing WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date())
+      + (SELECT coalesce(sum(sql_compute_cost_usd), 0) FROM genie_sql_compute WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date()),
+      (SELECT count(*) FROM cur_q)), 3) AS cost_per_question,
+  round((SELECT coalesce(sum(billable_cost_usd) + sum(free_usage_value_usd), 0) FROM genie_billing WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date())
+      + (SELECT coalesce(sum(sql_compute_cost_usd), 0) FROM genie_sql_compute WHERE event_date >= date_sub(current_date(), 30) AND event_date < current_date()), 2)
+    AS projected_cost_after_free_usd,
+  try_divide((SELECT count_if(channel = 'API') FROM cur_q), (SELECT count(*) FROM cur_q)) AS api_share_pct,
+  try_divide((SELECT count_if(mode = 'Agent mode') FROM cur_q), (SELECT count(*) FROM cur_q))
+    AS agent_mode_share_pct,
+  (SELECT n FROM health) AS agents_needing_attention

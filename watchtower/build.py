@@ -1,12 +1,10 @@
-"""Build the Genie Watchtower v2 Lakeview (AI/BI) dashboard JSON.
+"""Build the Genie Watchtower AI/BI dashboard and the refresh SQL for the bundle.
 
-    python -m watchtower.build                    # writes dashboard.json (uses genie_agent_dim)
-    python -m watchtower.build --system-only      # writes dashboard_system_only.json
+    python -m watchtower.build      # writes src/genie_watchtower.lvdash.json and src/sql/*.sql
 
 Layout uses the 6-column AI/BI grid. Each page is described as rows of widgets; the
 builder assigns x/y positions so nothing overlaps.
 """
-import argparse
 import json
 import pathlib
 
@@ -461,21 +459,15 @@ def governance_page():
     ])
 
 
-def about_page(mode):
-    names = {
-        "system": "Agent names come from the latest name in the audit log (system-tables-only build).",
-        "live": "Agent names come from the `genie_agent_dim` table (refreshed by notebooks/refresh_watchtower.py), "
-                "falling back to the audit log.",
-        "materialized": "Data is pre-computed daily into `wt_*` tables by notebooks/refresh_watchtower.py; agent "
-                        "names come from `genie_agent_dim`, falling back to the audit log.",
-    }[mode]
+def about_page():
     return page("about", "About & Definitions", [
         [text("about_txt", [
             "## About Genie Watchtower",
             "**Sources:** system.access.audit (Genie events), system.billing.usage and list_prices "
             "(Genie pay-as-you-go and SQL warehouse cost), system.query.history (Genie-generated SQL), "
-            "system.access.workspaces_latest.",
-            f"**Agent names and refresh:** {names}",
+            "system.access.workspaces_latest, plus agent names from the Genie API.",
+            "**Refresh:** the `genie_watchtower_refresh` job pre-computes everything daily into `wt_*` tables "
+            "(agent names in `genie_agent_dim`, falling back to the audit log), so this dashboard loads instantly.",
             "**Windows:** KPIs use the last 30 complete days; trends cover 13 months. Costs are list "
             "price; negotiated discounts are not reflected. Coverage is whatever the account's system "
             "tables cover for this metastore's region.",
@@ -485,30 +477,18 @@ def about_page(mode):
     ])
 
 
-MODES = {
-    # mode: (output file, uses agent dim)
-    "live": ("dashboard.json", True),
-    "system": ("dashboard_system_only.json", False),
-    "materialized": ("dashboard_materialized.json", True),
-}
+def build_dashboard(target=None, workspace_default=None, agent_default=None):
+    """Dashboard that reads the wt_* tables written by the refresh job.
 
-
-def build_dashboard(mode="live", target=None, workspace_default=None, agent_default=None):
-    """mode: live (system tables + genie_agent_dim), system (system tables only), or
-    materialized (reads wt_* tables written by the refresh notebook).
-    target: 'catalog.schema' holding genie_agent_dim / wt_* tables."""
-    target = target or "main.genie_watchtower"
-    datasets = build_datasets(with_dim=MODES[mode][1], dim_table=f"{target}.genie_agent_dim")
-
-    def sql(d):
-        if mode == "materialized":
-            return f"SELECT * FROM {target}.wt_{d.name.removeprefix('ds_')}"
-        return d.sql
-
+    target: 'catalog.schema' to fully qualify table names. Leave None for the bundle, where
+    the dashboard resource's dataset_catalog / dataset_schema decide where they live."""
+    prefix = f"{target}." if target else ""
     return {
-        "datasets": [{"name": d.name, "displayName": d.display, "queryLines": [sql(d)]} for d in datasets],
+        "datasets": [{"name": d.name, "displayName": d.display,
+                      "queryLines": [f"SELECT * FROM {prefix}wt_{d.name.removeprefix('ds_')}"]}
+                     for d in build_datasets()],
         "pages": [exec_page(), workspace_page(workspace_default), agent_page(agent_default), quality_page(),
-                  cost_page(), users_page(), governance_page(), about_page(mode)],
+                  cost_page(), users_page(), governance_page(), about_page()],
         "uiSettings": {"theme": {"widgetHeaderAlignment": "LEFT"}},
     }
 
@@ -517,31 +497,32 @@ def single_select_default(value):
     return {"defaultSelection": {"values": {"dataType": "STRING", "values": [{"value": value}]}}}
 
 
-def write_sql_files(target):
-    """SQL used by the refresh notebook, run in file-name order:
+DASHBOARD_FILE = ROOT / "src" / "genie_watchtower.lvdash.json"
+SQL_DIR = ROOT / "src" / "sql"
+
+
+def write_sql_files(target="__TARGET__"):
+    """SQL run by the refresh notebook in file-name order:
     NN_base_<base>.sql -> wt_base_<base> (one scan of each system table), then
-    ds_<name>.sql -> wt_<name> (reads only the wt_base_* tables)."""
-    out = ROOT / "sql"
-    out.mkdir(exist_ok=True)
-    for f in out.glob("*.sql"):
+    ds_<name>.sql -> wt_<name> (reads only the wt_base_* tables).
+    __TARGET__ is replaced by the notebook with its catalog.schema."""
+    SQL_DIR.mkdir(parents=True, exist_ok=True)
+    for f in SQL_DIR.glob("*.sql"):
         f.unlink()
     dim = f"{target}.genie_agent_dim"
     for i, base in enumerate(BASE_ORDER):
-        (out / f"{i:02d}_base_{base}.sql").write_text(base_sql(base, target, with_dim=dim) + "\n")
+        (SQL_DIR / f"{i:02d}_base_{base}.sql").write_text(base_sql(base, target, with_dim=dim) + "\n")
     with staged(target):
         for d in build_datasets(with_dim=True, dim_table=dim):
-            (out / f"{d.name}.sql").write_text(d.sql + "\n")
+            (SQL_DIR / f"{d.name}.sql").write_text(d.sql + "\n")
 
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--target", default="main.genie_watchtower",
-                   help="catalog.schema for genie_agent_dim and wt_* tables")
-    a = p.parse_args()
-    for mode, (fname, _) in MODES.items():
-        (ROOT / fname).write_text(json.dumps(build_dashboard(mode, a.target), indent=2) + "\n")
-        print(ROOT / fname)
-    write_sql_files("__TARGET__")  # the refresh notebook substitutes its catalog.schema
+    """Regenerate the bundle sources: src/genie_watchtower.lvdash.json and src/sql/*.sql."""
+    DASHBOARD_FILE.write_text(json.dumps(build_dashboard(), indent=2) + "\n")
+    write_sql_files()
+    print(DASHBOARD_FILE)
+    print(SQL_DIR)
 
 
 if __name__ == "__main__":

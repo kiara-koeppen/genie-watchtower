@@ -22,7 +22,7 @@ EXPECTED_PAGES = [
 
 @pytest.fixture(scope="module")
 def dash():
-    return build_dashboard("live", "cat.sch")
+    return build_dashboard()
 
 
 def _canvas_pages(dash):
@@ -126,12 +126,20 @@ def test_no_em_dashes_in_text(dash):
     assert "—" not in json.dumps(dash, ensure_ascii=False)
 
 
-def test_materialized_variant_reads_wt_tables():
-    d = build_dashboard("materialized", "cat.sch")
-    for ds in d["datasets"]:
-        assert ds["queryLines"][0].startswith("SELECT * FROM cat.sch.wt_"), ds["name"]
+def test_bundle_dashboard_uses_unqualified_wt_tables():
+    """The bundle sets dataset_catalog/schema, so table names must not be qualified."""
+    for ds in build_dashboard()["datasets"]:
+        assert ds["queryLines"][0] == f"SELECT * FROM wt_{ds['name'].removeprefix('ds_')}", ds["name"]
 
 
-def test_system_variant_has_no_dim_table():
-    d = build_dashboard("system")
-    assert "dim_names" not in json.dumps(d["datasets"])
+def test_committed_bundle_files_are_current(dash):
+    from watchtower.build import DASHBOARD_FILE, SQL_DIR
+    assert json.loads(DASHBOARD_FILE.read_text()) == build_dashboard(), "run: python -m watchtower.build"
+    assert len(list(SQL_DIR.glob("*.sql"))) == 9 + len(DATASETS)
+
+
+def test_sql_files_only_reference_target_placeholder():
+    from watchtower.build import SQL_DIR
+    for f in SQL_DIR.glob("*.sql"):
+        sql = f.read_text()
+        assert "users.kiara_koeppen" not in sql and "main.genie_watchtower" not in sql, f.name
