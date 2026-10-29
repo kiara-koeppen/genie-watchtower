@@ -411,9 +411,12 @@ SELECT
   try_divide(q.api_questions, q.questions) AS api_share_pct,
   coalesce(s.sql_queries, 0) AS sql_queries,
   s.sql_success_rate, s.empty_result_rate, s.p50_response_s, s.p95_response_s,
+  round(s.sql_success_rate * 100, 1) AS sql_success_pct,
+  round(s.empty_result_rate * 100, 1) AS empty_result_pct,
   coalesce(f.thumbs_up, 0) AS thumbs_up,
   coalesce(f.thumbs_down, 0) AS thumbs_down,
   try_divide(f.thumbs_up, f.thumbs_up + f.thumbs_down) AS positive_feedback_rate,
+  round(try_divide(f.thumbs_up, f.thumbs_up + f.thumbs_down) * 100, 1) AS positive_feedback_pct,
   coalesce(cm.comments, 0) AS comments,
   coalesce(cu.curation_events, 0) AS curation_events_30d,
   coalesce(cu.benchmark_runs, 0) AS benchmark_runs_30d,
@@ -502,7 +505,7 @@ def _exec_kpis_full(with_dim):
 
 
 def _agent_kpis(with_dim):
-    return with_ctes(*_all_agent_ctes(with_dim)) + _agent_kpis_body()
+    return with_ctes(*_all_agent_ctes(with_dim)) + _agent_kpis_body() + "ORDER BY questions DESC, agent_label"
 
 
 AGENT_COLUMNS = (
@@ -510,8 +513,8 @@ AGENT_COLUMNS = (
     "last_used_date", "days_since_last_use", "last_edited_date", "active_users", "active_users_prior",
     "questions", "questions_prior", "questions_change_pct", "conversations",
     "questions_per_conversation", "api_share_pct", "sql_queries", "sql_success_rate",
-    "empty_result_rate", "p50_response_s", "p95_response_s", "thumbs_up", "thumbs_down",
-    "positive_feedback_rate", "comments", "curation_events_30d", "benchmark_runs_30d",
+    "empty_result_rate", "p50_response_s", "p95_response_s", "sql_success_pct", "empty_result_pct",
+    "thumbs_up", "thumbs_down", "positive_feedback_rate", "positive_feedback_pct", "comments", "curation_events_30d", "benchmark_runs_30d",
     "billable_cost_usd", "free_usage_value_usd", "sql_compute_cost_usd", "total_cost_usd",
     "cost_per_question", "top_user", "health_status", "health_reason",
 )
@@ -560,6 +563,8 @@ SELECT
   try_divide(c.questions, c.active_users) AS questions_per_user,
   s.sql_success_rate,
   fb.positive_feedback_rate,
+  round(s.sql_success_rate * 100, 1) AS sql_success_pct,
+  round(fb.positive_feedback_rate * 100, 1) AS positive_feedback_pct,
   round(coalesce(k.billable, 0), 2) AS billable_cost_usd,
   round(coalesce(k.free_value, 0), 2) AS free_usage_value_usd,
   round(coalesce(m.compute, 0), 2) AS sql_compute_cost_usd,
@@ -577,13 +582,15 @@ LEFT JOIN (SELECT workspace_name, count(*) AS questions_prior, count(DISTINCT us
 LEFT JOIN ws_sql s ON s.workspace_name = l.workspace_name
 LEFT JOIN ws_fb fb ON fb.workspace_name = l.workspace_name
 LEFT JOIN ws_cost k ON k.workspace_name = l.workspace_name
-LEFT JOIN ws_compute m ON m.workspace_name = l.workspace_name"""
+LEFT JOIN ws_compute m ON m.workspace_name = l.workspace_name
+ORDER BY questions DESC"""
 
 
 WORKSPACE_COLUMNS = (
     "workspace_name", "active_users", "active_users_prior", "active_users_change_pct", "questions",
     "questions_prior", "questions_change_pct", "active_agents", "agents_total", "new_users",
-    "questions_per_user", "sql_success_rate", "positive_feedback_rate", "billable_cost_usd",
+    "questions_per_user", "sql_success_rate", "positive_feedback_rate", "sql_success_pct",
+    "positive_feedback_pct", "billable_cost_usd",
     "free_usage_value_usd", "sql_compute_cost_usd", "total_cost_usd", "cost_per_active_user",
     "agents_needing_attention", "share_of_questions_pct",
 )
@@ -711,7 +718,8 @@ SELECT l.user_email, l.workspace_name,
 FROM life l
 LEFT JOIN cur c ON c.user_email = l.user_email AND c.workspace_name = l.workspace_name
 LEFT JOIN agent_labels ta ON ta.agent_id = c.top_agent_id
-LEFT JOIN cost k ON k.user_email = l.user_email AND k.workspace_name = l.workspace_name"""
+LEFT JOIN cost k ON k.user_email = l.user_email AND k.workspace_name = l.workspace_name
+ORDER BY questions_30d DESC"""
 
 
 def _retention_cohort(with_dim):
