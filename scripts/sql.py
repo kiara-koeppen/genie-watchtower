@@ -13,7 +13,7 @@ import time
 
 def run_sql(sql, profile=None, warehouse=None, timeout_s=600):
     profile = profile or os.environ.get("WATCHTOWER_PROFILE", "e2-demo-field-eng")
-    warehouse = warehouse or os.environ.get("WATCHTOWER_WAREHOUSE", "fa5f84c41a5dfaeb")
+    warehouse = warehouse or os.environ.get("WATCHTOWER_WAREHOUSE", "e3432962461d4dd0")
     body = {"warehouse_id": warehouse, "statement": sql, "wait_timeout": "50s",
             "disposition": "INLINE", "format": "JSON_ARRAY"}
     resp = _api("post", "/api/2.0/sql/statements", profile, body)

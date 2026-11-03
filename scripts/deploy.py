@@ -1,7 +1,7 @@
 """Dev helper: create or update the dashboard directly (outside the bundle) and publish it,
 preselecting the busiest workspace and agent. Customers should use `databricks bundle deploy`.
 
-    python scripts/deploy.py --profile e2-demo-field-eng --warehouse fa5f84c41a5dfaeb \
+    python scripts/deploy.py --profile e2-demo-field-eng --warehouse e3432962461d4dd0 \
         --file dashboard_materialized.json --name "Genie Watchtower"
 
 The dashboard id per profile is remembered in .deploy_state.json so reruns update in place.
